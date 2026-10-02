@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f3f6f3">
+  <title>SASPAL Gmail AI Assistant</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="/static/email-intent.js" defer></script>
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <main class="app-frame">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="SASPAL Gmail Assistant home">
+        <span class="brand-mark" aria-hidden="true">S</span>
+        <span class="brand-name">SASPAL<span class="brand-divider">/</span>MAIL</span>
+      </a>
+      <div class="connection-status"><span class="status-dot"></span> Gmail connected <span class="status-separator">·</span> Send requires confirmation</div>
+    </header>
+
+    <div class="workspace">
+      <aside class="sidebar" aria-label="Chat shortcuts">
+        <div class="sidebar-label">WORKSPACE</div>
+        <div class="active-item"><span class="compose-icon" aria-hidden="true">+</span> New conversation</div>
+
+        <div class="sidebar-label shortcuts-label">QUICK REQUESTS</div>
+        <button class="shortcut" type="button" data-prompt="Show me my latest emails">
+          <span class="shortcut-icon icon-inbox" aria-hidden="true">▤</span><span>Latest emails</span>
+        </button>
+        <button class="shortcut" type="button" data-prompt="Show unread emails">
+          <span class="shortcut-icon icon-unread" aria-hidden="true">◉</span><span>Unread emails</span>
+        </button>
+        <button class="shortcut" type="button" data-prompt="Find emails about invoices">
+          <span class="shortcut-icon icon-search" aria-hidden="true">⌕</span><span>Invoices</span>
+        </button>
+        <button class="shortcut" type="button" data-prompt="Summarize my latest emails">
+          <span class="shortcut-icon icon-summary" aria-hidden="true">✦</span><span>Summarize</span>
+        </button>
+        <button class="shortcut" type="button" data-prompt="Find emails from LinkedIn">
+          <span class="shortcut-icon icon-linkedin" aria-hidden="true">in</span><span>LinkedIn</span>
+        </button>
+        <button class="shortcut" id="compose-email-button" type="button">
+          <span class="shortcut-icon" aria-hidden="true">&#9993;</span><span>Compose email</span>
+        </button>
+
+        <div class="sidebar-bottom">
+          <div class="account-label">ACCESS</div>
+          <div class="access-row"><span class="access-icon" aria-hidden="true">G</span><span><strong>Gmail</strong><small>Send requires confirmation</small></span><span class="access-check" aria-label="Connected">✓</span></div>
+        </div>
+      </aside>
+
+      <section class="chat-panel" aria-label="Gmail assistant chat">
+        <div class="chat-heading">
+          <div>
+            <div class="eyebrow"><span class="eyebrow-line"></span> PERSONAL INBOX</div>
+            <h1>SASPAL Gmail AI Assistant</h1>
+            <p>Good morning. What would you like to find?</p>
+          </div>
+          <div class="heading-actions">
+            <div class="secure-badge"><span aria-hidden="true">✳</span> Private session</div>
+            <button id="clear-conversation" class="clear-button" type="button">Clear Conversation</button>
+          </div>
+        </div>
+
+        <div class="conversation" id="conversation" role="log" aria-live="polite" aria-relevant="additions">
+          <div class="message-row assistant-row">
+            <div class="avatar assistant-avatar" aria-hidden="true">S</div>
+            <div class="message-content">
+              <div class="message-meta"><strong>SASPAL Assistant</strong><span>NOW</span></div>
+              <div class="bubble assistant-bubble">Hi, I can search Gmail, open messages, or prepare an email for your review.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="composer-area">
+          <form class="composer" id="chat-form">
+            <label class="sr-only" for="message-input">Message the Gmail assistant</label>
+            <textarea id="message-input" name="message" rows="1" maxlength="4000" placeholder="Ask about your Gmail…" required></textarea>
+            <button class="send-button" id="send-button" type="submit"><span>Send</span><span class="send-arrow" aria-hidden="true">↑</span></button>
+          </form>
+          <div class="composer-foot"><span>Email drafts require confirmation to send</span><span>Enter to send <span class="key-hint">↵</span></span></div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <dialog class="email-dialog" id="email-dialog" aria-labelledby="email-dialog-title">
+    <form class="email-dialog-form" id="email-draft-form">
+      <div class="email-dialog-heading">
+        <div>
+          <div class="eyebrow"><span class="eyebrow-line"></span> GMAIL</div>
+          <h2 id="email-dialog-title">Compose email</h2>
+        </div>
+        <button class="dialog-close" id="close-email-dialog" type="button" aria-label="Close">×</button>
+      </div>
+
+      <div id="email-compose-fields">
+        <label class="dialog-field">
+          <span>To</span>
+          <input id="email-to" name="to" type="email" maxlength="254" autocomplete="email" required>
+        </label>
+        <label class="dialog-field">
+          <span>What should the email say?</span>
+          <textarea id="email-instructions" name="instructions" rows="4" maxlength="8000" required></textarea>
+        </label>
+        <div class="dialog-actions">
+          <button class="dialog-button secondary" id="cancel-email-compose" type="button">Cancel</button>
+          <button class="dialog-button primary" id="draft-email-button" type="submit">Draft Email</button>
+        </div>
+      </div>
+
+      <section class="email-review" id="email-review" hidden aria-label="Review email before sending">
+        <div class="review-field"><span>To</span><div id="review-email-to"></div></div>
+        <div class="review-field"><span>Subject</span><div id="review-email-subject"></div></div>
+        <div class="review-field review-message"><span>Message</span><div id="review-email-body"></div></div>
+        <div class="dialog-actions">
+          <button class="dialog-button secondary" id="cancel-email-draft" type="button">Cancel</button>
+          <button class="dialog-button primary confirm-send-button" id="confirm-send-email" type="button">Confirm Send</button>
+        </div>
+      </section>
+      <p class="email-dialog-status" id="email-dialog-status" role="status" aria-live="polite"></p>
+    </form>
+  </dialog>
+</body>
+</html>
