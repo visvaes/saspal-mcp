@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -97,6 +98,13 @@ class AgentBehaviorTests(unittest.TestCase):
         self.completions = FakeCompletions(responses)
         self.host.client.chat.completions = self.completions
         return asyncio.run(self.host.respond(message, history))
+
+    def test_vercel_entrypoint_targets_the_fastapi_app_not_test_imports(self):
+        project_root = Path(__file__).resolve().parents[1]
+        with (project_root / "pyproject.toml").open("rb") as config_file:
+            config = tomllib.load(config_file)
+
+        self.assertEqual(config["tool"]["vercel"]["entrypoint"], "web_app:app")
 
     def test_greeting_is_conversational_without_a_gmail_tool_call(self):
         response = self.answer("hi", [model_response("Hi! How can I help you with your Gmail?")])
