@@ -115,7 +115,7 @@ From the project root, with `.env`, `credentials.json`, and a valid `token.json`
 
 Open `http://127.0.0.1:8000/`. The host binds to loopback for local use. Do not expose it to a network or deploy it publicly as-is.
 
-Vercel's FastAPI deployment entrypoint is set explicitly to `web_app:app` in `pyproject.toml`, so test modules that import the app are not mistaken for the deployment target. This setting resolves entrypoint detection only; the current application also depends on local OAuth files, SQLite persistence, and subprocess-hosted MCP servers. Vercel deployment requires replacing those local-only dependencies with deployment-compatible secrets, persistent storage, and MCP connectivity before the application can operate there.
+Vercel's FastAPI deployment entrypoint is set explicitly to `web_app:app` in `pyproject.toml`, so test modules that import the app are not mistaken for the deployment target. That file also declares the Python version and runtime dependencies required by Vercel's `uv` build. This resolves entrypoint and dependency-manifest detection only; the current application also depends on local OAuth files, SQLite persistence, and subprocess-hosted MCP servers. Vercel deployment requires replacing those local-only dependencies with deployment-compatible secrets, persistent storage, and MCP connectivity before the application can operate there.
 
 ## Run tests
 

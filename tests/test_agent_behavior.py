@@ -2,7 +2,6 @@ import asyncio
 import json
 import os
 import tempfile
-import tomllib
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -101,10 +100,12 @@ class AgentBehaviorTests(unittest.TestCase):
 
     def test_vercel_entrypoint_targets_the_fastapi_app_not_test_imports(self):
         project_root = Path(__file__).resolve().parents[1]
-        with (project_root / "pyproject.toml").open("rb") as config_file:
-            config = tomllib.load(config_file)
+        config = (project_root / "pyproject.toml").read_text(encoding="utf-8")
 
-        self.assertEqual(config["tool"]["vercel"]["entrypoint"], "web_app:app")
+        self.assertIn("[project]", config)
+        self.assertIn('requires-python = ">=3.10"', config)
+        self.assertIn('[tool.vercel]\nentrypoint = "web_app:app"', config)
+        self.assertIn("[tool.uv]\npackage = false", config)
 
     def test_greeting_is_conversational_without_a_gmail_tool_call(self):
         response = self.answer("hi", [model_response("Hi! How can I help you with your Gmail?")])
