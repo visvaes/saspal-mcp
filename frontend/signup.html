@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f3f6f3">
+  <title>Create account | SASPAL Mail</title>
+  <link rel="stylesheet" href="/static/auth.css">
+  <script src="/static/auth.js" defer></script>
+</head>
+<body>
+  <main class="auth-layout">
+    <a class="auth-brand" href="/login" aria-label="SASPAL Mail sign in"><span class="brand-mark">S</span><span>SASPAL<span class="brand-divider">/</span>MAIL</span></a>
+    <section class="auth-panel" aria-labelledby="auth-title">
+      <div class="auth-kicker">CREATE YOUR ACCOUNT</div>
+      <h1 id="auth-title">Get started</h1>
+      <p class="auth-subtitle">Create an account to access the assistant.</p>
+      <form data-auth-form="signup" novalidate>
+        <label class="auth-field"><span>Full Name</span><input name="full_name" type="text" autocomplete="name" minlength="1" maxlength="120" required></label>
+        <label class="auth-field"><span>Email</span><input name="email" type="email" autocomplete="email" maxlength="254" required></label>
+        <label class="auth-field"><span>Password</span><input name="password" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
+        <label class="auth-field"><span>Confirm Password</span><input name="password_confirmation" type="password" autocomplete="new-password" minlength="12" maxlength="256" required></label>
+        <p class="auth-message" role="status" aria-live="polite"></p>
+        <button class="auth-submit" type="submit">Create Account</button>
+      </form>
+      <p class="auth-switch">Already have an account? <a href="/login">Sign In</a></p>
+    </section>
+    <footer class="auth-footer">SASPAL MAIL <span>·</span> SECURE ACCESS</footer>
+  </main>
+</body>
+</html>

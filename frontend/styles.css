@@ -99,7 +99,7 @@ button { -webkit-tap-highlight-color: transparent; }
 .eyebrow-line { width: 17px; height: 2px; border-radius: 2px; background: var(--coral); }
 h1 { margin: 8px 0 4px; color: var(--ink); font: 800 23px 'Manrope', 'Segoe UI', sans-serif; letter-spacing: 0; }
 .chat-heading p { margin: 0; color: var(--muted); font-size: 12px; }
-.heading-actions { display: flex; align-items: center; gap: 10px; }
+.heading-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
 .secure-badge { align-self: flex-start; margin-top: 11px; padding: 7px 10px; border: 1px solid #e3ece5; border-radius: 6px; color: #557062; background: #f8fbf8; font-size: 10px; font-weight: 600; white-space: nowrap; }
 .secure-badge span { margin-right: 4px; color: #ca8a43; }
 .clear-button {

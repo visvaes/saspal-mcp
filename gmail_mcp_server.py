@@ -283,7 +283,10 @@ def _list_error(message: str) -> list[dict[str, str]]:
 
 @mcp.tool()
 def search_emails(query: str, max_results: int = 10) -> list[EmailMetadata] | list[dict[str, str]]:
-    """Search Gmail with Gmail search syntax and return matching message metadata."""
+    """Search matching Gmail messages by sender, subject, topic, or Gmail search query.
+
+    Use for targeted searches. Returns sender, subject, date, snippet, and message ID.
+    """
     try:
         return _list_emails(query, max_results)
     except GmailAuthenticationError:
@@ -296,7 +299,7 @@ def search_emails(query: str, max_results: int = 10) -> list[EmailMetadata] | li
 
 @mcp.tool()
 def get_email(message_id: str) -> EmailMessage | dict[str, str]:
-    """Retrieve one Gmail message with metadata and its readable text body."""
+    """Retrieve one message's metadata and readable body when its content is needed."""
     if not message_id.strip():
         return {"error": "Gmail message not found."}
 
@@ -367,7 +370,10 @@ def send_email(to: str, subject: str, body: str) -> dict[str, str]:
 
 @mcp.tool()
 def list_recent_emails(max_results: int = 10) -> list[EmailMetadata] | list[dict[str, str]]:
-    """Return the most recent Gmail message metadata, up to 50 messages."""
+    """List the newest Gmail messages when the user asks for recent or latest emails.
+
+    Returns message metadata and preview snippets, up to 50 messages.
+    """
     try:
         return _list_emails(None, max_results)
     except GmailAuthenticationError:
@@ -380,7 +386,10 @@ def list_recent_emails(max_results: int = 10) -> list[EmailMetadata] | list[dict
 
 @mcp.tool()
 def get_unread_emails(max_results: int = 10) -> list[EmailMetadata] | list[dict[str, str]]:
-    """Return unread Gmail message metadata, up to 50 messages."""
+    """List unread Gmail messages when the user asks to see unread messages.
+
+    Use count_emails instead when the user asks only for an unread count.
+    """
     try:
         return _list_emails("is:unread", max_results)
     except GmailAuthenticationError:
@@ -393,7 +402,7 @@ def get_unread_emails(max_results: int = 10) -> list[EmailMetadata] | list[dict[
 
 @mcp.tool()
 def get_email_labels() -> list[GmailLabel] | dict[str, str]:
-    """Return available Gmail label IDs, names, and types."""
+    """List the user's Gmail labels when the request is about labels or folders."""
     try:
         response = get_gmail_service().users().labels().list(userId="me").execute()
         labels = response.get("labels", [])
@@ -416,7 +425,10 @@ def get_email_labels() -> list[GmailLabel] | dict[str, str]:
 
 @mcp.tool()
 def count_emails(query: str = "") -> int | dict[str, str]:
-    """Return the exact message count, optionally filtered by Gmail search syntax."""
+    """Count messages matching an optional Gmail search query.
+
+    Use query 'is:unread' for unread counts; returns an exact integer count.
+    """
     query = query.strip()
 
     try:
@@ -450,9 +462,10 @@ def search_emails_by_date(
     query: str = "",
     max_results: int = 10,
 ) -> list[EmailMetadata] | list[dict[str, str]]:
-    """Search metadata in an inclusive date range using Gmail after/before operators.
+    """Search message metadata in an inclusive date range.
 
-    Dates must use YYYY-MM-DD. An optional Gmail query can further filter the range.
+    Use for requests about messages from or within dates. Dates must use YYYY-MM-DD.
+    An optional Gmail query can further filter the range.
     """
     try:
         start = date.fromisoformat(start_date)
@@ -482,7 +495,11 @@ def get_email_summary_data(
     query: str = "",
     max_results: int = 10,
 ) -> list[EmailMetadata] | list[dict[str, str]]:
-    """Return metadata and snippets for summarization without downloading message bodies."""
+    """Retrieve recent matching metadata and snippets for analysis or summarization.
+
+    Use when a summary can be based on message headers and preview snippets; does not
+    download full message bodies.
+    """
     try:
         return _list_emails(query.strip() or None, max_results)
     except GmailAuthenticationError:

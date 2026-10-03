@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f3f6f3">
+  <title>Sign in | SASPAL Mail</title>
+  <link rel="stylesheet" href="/static/auth.css">
+  <script src="/static/auth.js" defer></script>
+</head>
+<body>
+  <main class="auth-layout">
+    <a class="auth-brand" href="/login" aria-label="SASPAL Mail sign in"><span class="brand-mark">S</span><span>SASPAL<span class="brand-divider">/</span>MAIL</span></a>
+    <section class="auth-panel" aria-labelledby="auth-title">
+      <div class="auth-kicker">PRIVATE INBOX ACCESS</div>
+      <h1 id="auth-title">Welcome back</h1>
+      <p class="auth-subtitle">Sign in to continue to your assistant.</p>
+      <form data-auth-form="login" novalidate>
+        <label class="auth-field"><span>Email</span><input name="email" type="email" autocomplete="email" maxlength="254" required></label>
+        <label class="auth-field"><span>Password</span><input name="password" type="password" autocomplete="current-password" minlength="12" maxlength="256" required></label>
+        <div class="auth-meta"><a href="/forgot-password">Forgot Password?</a></div>
+        <p class="auth-message" role="status" aria-live="polite"></p>
+        <button class="auth-submit" type="submit">Sign In</button>
+      </form>
+      <p class="auth-switch">Don't have an account? <a href="/signup">Sign Up</a></p>
+    </section>
+    <footer class="auth-footer">SASPAL MAIL <span>·</span> SECURE ACCESS</footer>
+  </main>
+</body>
+</html>

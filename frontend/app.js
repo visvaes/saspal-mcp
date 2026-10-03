@@ -2,6 +2,7 @@ const form = document.querySelector("#chat-form");
 const input = document.querySelector("#message-input");
 const sendButton = document.querySelector("#send-button");
 const clearConversationButton = document.querySelector("#clear-conversation");
+const logoutButton = document.querySelector("#logout-button");
 const conversation = document.querySelector("#conversation");
 const composeEmailButton = document.querySelector("#compose-email-button");
 const emailDialog = document.querySelector("#email-dialog");
@@ -15,17 +16,93 @@ const cancelEmailDraftButton = document.querySelector("#cancel-email-draft");
 const emailIntent = window.SASPAL_EMAIL_INTENT;
 let pendingEmailDraftId = null;
 const history = [];
+const SAFE_CHAT_STATUSES = new Set([
+  "Understanding your request...",
+  "Checking Gmail...",
+  "Checking available information...",
+  "Analyzing results...",
+  "Preparing response...",
+]);
 
-function getStatusText(message) {
-  const text = message.toLowerCase();
+function redactHistoryText(value) {
+  const text = String(value || "");
+  if (/\b(?:credentials|token)\.json\b/i.test(text)) return "[REDACTED]";
+  return text
+    .replace(
+      /\b((?:verification|security|authentication|auth|login|sign[- ]in)\s+(?:code|passcode)|one[- ]time\s+(?:code|password)|passcode|otp)(\s*(?:is|was|:|=|#)\s*|\s+)([A-Z0-9_-]{4,16})\b/gi,
+      "$1$2[REDACTED]",
+    )
+    .replace(
+      /\b(api[\s_-]*key|access[\s_-]*token|refresh[\s_-]*token|oauth[\s_-]*token|auth[\s_-]*token|client[\s_-]*secret|password|passwd|passphrase)(\s*(?:is|:|=)\s*)(?:"[^"]+"|'[^']+'|[^\s,;]+)/gi,
+      "$1$2[REDACTED]",
+    )
+    .replace(
+      /(["']?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|oauth[_-]?token|auth[_-]?token|client[_-]?(?:secret|id)|private[_-]?key|id[_-]?token|token|password|passwd|passphrase)["']?\s*:\s*)(?:"[^"]*"|'[^']*'|[^,\s}\]]+)/gi,
+      '$1"[REDACTED]"',
+    )
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]{8,}/gi, "Bearer [REDACTED]");
+}
 
-  if (/unread/.test(text)) return "Checking unread emails...";
-  if (/summarize|summary/.test(text)) return "Summarizing emails...";
-  if (/linkedin|linked[in]/.test(text)) return "Filtering LinkedIn emails...";
-  if (/invoice|bill|receipt/.test(text)) return "Searching Gmail...";
-  if (/message id|read email|open email|email id/.test(text)) return "Reading email...";
-  if (/latest|recent|new/.test(text)) return "Searching Gmail...";
-  return "Searching Gmail...";
+function rememberConversation(userMessage, assistantMessage, emails = []) {
+  const emailContext = emails.length
+    ? `\nRetrieved email records: ${JSON.stringify(emails.slice(0, 10))}`
+    : "";
+  history.push(
+    { role: "user", content: redactHistoryText(userMessage).slice(0, 12000) },
+    {
+      role: "assistant",
+      content: redactHistoryText(`${assistantMessage}${emailContext}`).slice(0, 12000),
+    },
+  );
+  if (history.length > 24) history.splice(0, history.length - 24);
+}
+
+function updatePendingStatus(pending, status) {
+  if (!SAFE_CHAT_STATUSES.has(status)) return;
+  const label = pending.querySelector(".loading-status");
+  if (label) label.textContent = status;
+}
+
+async function readChatStream(response, pending) {
+  if (!response.body) throw new Error("The server returned an empty response.");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result = null;
+  let emails = [];
+
+  function consumeEvent(block) {
+    let eventName = "message";
+    const dataLines = [];
+    for (const line of block.split("\n")) {
+      if (line.startsWith("event:")) eventName = line.slice(6).trim();
+      else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+    }
+    if (!dataLines.length) return;
+    const payload = JSON.parse(dataLines.join("\n"));
+
+    if (eventName === "status") updatePendingStatus(pending, payload.status);
+    else if (eventName === "emails" && Array.isArray(payload.emails)) emails = payload.emails;
+    else if (eventName === "done") result = payload;
+    else if (eventName === "error") throw new Error(payload.message || "The chat request failed.");
+  }
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, "\n");
+    let separator;
+    while ((separator = buffer.indexOf("\n\n")) !== -1) {
+      consumeEvent(buffer.slice(0, separator));
+      buffer = buffer.slice(separator + 2);
+    }
+    if (done) break;
+  }
+
+  if (buffer.trim()) consumeEvent(buffer);
+  if (!result || typeof result.response !== "string") {
+    throw new Error("The server ended the response before it was complete.");
+  }
+  return { ...result, emails };
 }
 
 function cleanText(value) {
@@ -371,12 +448,23 @@ async function createEmailDraft(to, instructions) {
 }
 
 async function fetchJson(url, options = {}) {
+  const csrfCookie = document.cookie.split(";").map((value) => value.trim()).find((value) => value.startsWith("saspal_csrf="));
+  const csrfToken = csrfCookie ? decodeURIComponent(csrfCookie.slice("saspal_csrf=".length)) : "";
   const response = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": csrfToken,
+      ...options.headers,
+    },
     ...options,
   });
 
   const payload = await response.json().catch(() => null);
+  if (response.status === 401) {
+    window.location.assign("/login?next=/");
+    throw new Error("Your session has expired. Please sign in again.");
+  }
   if (!response.ok) {
     const detail = payload && payload.detail ? payload.detail : "The request failed.";
     throw new Error(detail);
@@ -448,79 +536,6 @@ confirmSendEmailButton.addEventListener("click", async () => {
   }
 });
 
-async function handleStructuredRequest(message) {
-  const text = message.toLowerCase();
-
-  if (/show my latest emails|latest emails|recent emails/.test(text)) {
-    const emails = await fetchJson("/api/recent-emails");
-    appendMessage("assistant", "", { richContent: createResultPanel("Recent emails", emails) });
-    history.push({ role: "user", content: message });
-    history.push({ role: "assistant", content: `Recent emails (${emails.length}).` });
-    return true;
-  }
-
-  if (/show unread emails|unread emails/.test(text)) {
-    const emails = await fetchJson("/api/search", {
-      method: "POST",
-      body: JSON.stringify({ query: "is:unread", max_results: 10 }),
-    });
-    appendMessage("assistant", "", { richContent: createResultPanel("Unread emails", emails) });
-    history.push({ role: "user", content: message });
-    history.push({ role: "assistant", content: `Unread emails (${emails.length}).` });
-    return true;
-  }
-
-  if (/unread count|how many unread emails|count unread/.test(text)) {
-    const result = await fetchJson("/api/unread-count");
-    const count = Number(result.count || 0);
-    appendMessage("assistant", `${count} unread email${count === 1 ? "" : "s"} found.`);
-    history.push({ role: "user", content: message });
-    history.push({ role: "assistant", content: `${count} unread emails.` });
-    return true;
-  }
-
-  const dateRange = message.match(/(\d{4}-\d{2}-\d{2})\s*(?:to|-|through|–)\s*(\d{4}-\d{2}-\d{2})/i);
-  if (dateRange) {
-    const [, startDate, endDate] = dateRange;
-    const emails = await fetchJson("/api/date-search", {
-      method: "POST",
-      body: JSON.stringify({ start_date: startDate, end_date: endDate, query: "", max_results: 10 }),
-    });
-    appendMessage("assistant", "", { richContent: createResultPanel(`Emails from ${startDate} to ${endDate}`, emails) });
-    history.push({ role: "user", content: message });
-    history.push({ role: "assistant", content: `Emails from ${startDate} to ${endDate}.` });
-    return true;
-  }
-
-  if (/find emails from linkedin|linkedin/.test(text)) {
-    const emails = await fetchJson("/api/search", {
-      method: "POST",
-      body: JSON.stringify({ query: "from:linkedin.com", max_results: 10 }),
-    });
-    appendMessage("assistant", "", { richContent: createResultPanel("LinkedIn emails", emails) });
-    history.push({ role: "user", content: message });
-    history.push({ role: "assistant", content: `LinkedIn emails (${emails.length}).` });
-    return true;
-  }
-
-  if (/find emails about invoices|invoice/.test(text)) {
-    const emails = await fetchJson("/api/search", {
-      method: "POST",
-      body: JSON.stringify({ query: "invoice", max_results: 10 }),
-    });
-    appendMessage("assistant", "", { richContent: createResultPanel("Invoice-related emails", emails) });
-    history.push({ role: "user", content: message });
-    history.push({ role: "assistant", content: `Invoice-related emails (${emails.length}).` });
-    return true;
-  }
-
-  if (/summarize my latest emails|summarize.*emails|summary.*emails/.test(text)) {
-    return false;
-  }
-
-  return false;
-}
-
 async function sendMessage(value = input.value) {
   const message = value.trim();
   if (!message || sendButton.disabled) return;
@@ -530,8 +545,10 @@ async function sendMessage(value = input.value) {
   input.style.height = "auto";
   sendButton.disabled = true;
 
-  const statusText = getStatusText(message);
-  const pending = appendMessage("assistant", "", { loading: true, statusText });
+  const pending = appendMessage("assistant", "", {
+    loading: true,
+    statusText: "Understanding your request...",
+  });
 
   try {
     const emailRequestHandled = await emailIntent.routeEmailSendRequest(message, {
@@ -567,34 +584,42 @@ async function sendMessage(value = input.value) {
       return;
     }
 
-    const handled = await handleStructuredRequest(message);
-    if (handled) {
-      pending.remove();
-      return;
-    }
-
-    const response = await fetch("/chat", {
+    const response = await fetch("/chat/stream", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRF-Token": readCsrfToken(),
+      },
       body: JSON.stringify({ message, history }),
     });
 
-    let payload;
-    try {
-      payload = await response.json();
-    } catch {
-      throw new Error("The server returned an invalid response.");
-    }
-
     if (!response.ok) {
+      if (response.status === 401) {
+        window.location.assign("/login?next=/");
+        return;
+      }
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch {
+        throw new Error("The server returned an invalid response.");
+      }
       throw new Error(payload.detail || "The chat request failed.");
     }
 
+    const payload = await readChatStream(response, pending);
     pending.remove();
-    const renderedResponse = renderAssistantResponse(payload.response || "");
-    appendMessage("assistant", "", { richContent: renderedResponse });
-    history.push({ role: "user", content: message });
-    history.push({ role: "assistant", content: payload.response || "" });
+    const renderedResponse = renderAssistantResponse(payload.response);
+    if (payload.emails.length) {
+      const combined = document.createElement("div");
+      combined.className = "response-body";
+      combined.append(renderedResponse, createResultPanel("Gmail results", payload.emails));
+      appendMessage("assistant", "", { richContent: combined });
+    } else {
+      appendMessage("assistant", "", { richContent: renderedResponse });
+    }
+    rememberConversation(message, payload.response, payload.emails);
   } catch (error) {
     pending.remove();
     appendMessage("assistant", `I couldn't complete that request. ${error.message}`);
@@ -613,7 +638,7 @@ function resetConversation() {
     <div class="avatar assistant-avatar" aria-hidden="true">S</div>
     <div class="message-content">
       <div class="message-meta"><strong>SASPAL Assistant</strong><span>NOW</span></div>
-      <div class="bubble assistant-bubble">Hi, I can search Gmail, open messages, or prepare an email for your review.</div>
+      <div class="bubble assistant-bubble">Hi! I'm your SASPAL Gmail Assistant. I can help you search, summarize, and understand your emails, or answer general questions.</div>
     </div>
   `;
   conversation.append(welcome);
@@ -643,5 +668,26 @@ document.querySelectorAll("[data-prompt]").forEach((button) => {
 if (clearConversationButton) {
   clearConversationButton.addEventListener("click", () => {
     resetConversation();
+  });
+}
+
+function readCsrfToken() {
+  const cookie = document.cookie.split(";").map((value) => value.trim()).find((value) => value.startsWith("saspal_csrf="));
+  return cookie ? decodeURIComponent(cookie.slice("saspal_csrf=".length)) : "";
+}
+
+if (logoutButton) {
+  logoutButton.addEventListener("click", async () => {
+    logoutButton.disabled = true;
+    try {
+      await fetchJson("/auth/logout", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+    } catch {
+      // Always leave the protected view; the server session will expire if logout failed.
+    } finally {
+      window.location.assign("/login");
+    }
   });
 }

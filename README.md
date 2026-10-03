@@ -22,6 +22,14 @@ Gmail API
 
 The MCP Host also connects to the SASPAL Technologies MCP for its existing read-only company-information tools.
 
+## Conversational agent behavior
+
+Chat requests go to the LLM with the discovered MCP tool descriptions. The LLM answers greetings and general
+questions directly, and selects Gmail tools only when the request needs mailbox data. Tool results are returned
+to the LLM for analysis, with a five-call limit per request. Recent conversation context is bounded to 24 turns
+and sensitive values are redacted before it is reused. The chat UI streams safe progress labels and sanitized
+email records; it does not display prompts, tool arguments, or hidden reasoning.
+
 ## Gmail features
 
 - Search email using Gmail search syntax
@@ -35,6 +43,10 @@ The MCP Host also connects to the SASPAL Technologies MCP for its existing read-
 
 ## Security model
 
+- Account passwords are hashed with Argon2id. Opaque sessions are stored server-side in a separate local auth database; only session-token hashes are persisted.
+- Session cookies are HttpOnly and SameSite-protected. State-changing requests require CSRF validation. Set `SESSION_COOKIE_SECURE=true` when serving over HTTPS.
+- Password reset uses short-lived, single-use tokens stored as hashes and sent through separately configured SMTP. It does not use Gmail OAuth.
+- All app accounts use the project's existing app-wide Gmail OAuth account. Every authenticated account can access the same configured mailbox.
 - Gmail access uses OAuth 2.0 credentials stored locally.
 - The requested Gmail scopes are `gmail.readonly` and `gmail.send`; `gmail.modify` is not requested.
 - The LLM cannot access the `send_email` tool during normal chat. The application only calls it after the user explicitly confirms a pending draft.
@@ -64,7 +76,7 @@ For PowerShell sessions where script activation is restricted, invoke `.venv\Scr
 
 ## Environment setup
 
-Copy `.env.example` to `.env` and set `OPENROUTER_API_KEY` to your own key. `OPENROUTER_MODEL` is optional; the application uses its configured default when it is omitted. Never commit `.env` or share its contents.
+Copy `.env.example` to `.env` and set `OPENROUTER_API_KEY` to your own key. `OPENROUTER_MODEL` is optional; the application uses its configured default when it is omitted. Configure the SMTP fields to enable password recovery. Never commit `.env` or share its contents.
 
 ```powershell
 Copy-Item .env.example .env
@@ -85,6 +97,14 @@ Copy-Item .env.example .env
 
 The OAuth helper checks Gmail authorization and lists message IDs only. It does not send email. Reauthorize through the helper if the saved authorization becomes invalid.
 
+## Account access and password recovery
+
+Open `/signup` to create an account. A successful sign-up signs the account in and opens the assistant. The assistant and its Gmail/chat APIs require an active session; use **Sign Out** to revoke the current session.
+
+All accounts share the single Gmail mailbox authorized by the local OAuth token. Do not enable open registration on a public deployment unless every registrant is trusted to access that mailbox. Add an invitation or account-approval policy before exposing registration beyond a trusted local environment.
+
+The Forgot Password flow requires SMTP settings in `.env`: `SMTP_HOST`, `SMTP_PORT`, `SMTP_FROM_EMAIL`, `APP_BASE_URL`, and optionally `SMTP_USERNAME`/`SMTP_PASSWORD`. Reset links expire after 30 minutes and can be used once. The application returns a generic message to avoid confirming whether an email is registered. No SMTP password or reset token belongs in Git.
+
 ## Start the application
 
 From the project root, with `.env`, `credentials.json`, and a valid `token.json` in place:
@@ -100,8 +120,9 @@ Open `http://127.0.0.1:8000/`. The host binds to loopback for local use. Do not 
 Run Python tests and syntax validation:
 
 ```powershell
-.\.venv\Scripts\python.exe -m py_compile gmail_mcp_server.py web_app.py mcp_host.py tests/test_gmail_mcp.py
+.\.venv\Scripts\python.exe -m py_compile gmail_mcp_server.py web_app.py mcp_host.py tests/test_gmail_mcp.py tests/test_agent_behavior.py
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m unittest tests.test_auth -v
 .\.venv\Scripts\python.exe -m unittest test_gmail_auth -v
 ```
 
@@ -110,6 +131,7 @@ Run JavaScript syntax checks and frontend parser tests:
 ```powershell
 node --check frontend/email-intent.js
 node --check frontend/app.js
+node --check frontend/auth.js
 node --test frontend/email-intent.test.cjs
 ```
 
@@ -134,6 +156,8 @@ A draft must be reviewed and explicitly confirmed in the UI before it can be sen
 |-- .gitignore
 |-- README.md
 |-- requirements.txt
+|-- auth_mailer.py
+|-- auth_store.py
 |-- database.py                  # Existing local company-information database access
 |-- gmail_mcp_server.py          # Gmail MCP tools and OAuth service
 |-- gmail_test.py                # Local OAuth setup/check helper
@@ -144,6 +168,12 @@ A draft must be reviewed and explicitly confirmed in the UI before it can be sen
 |-- tests/
 |   |-- test_gmail_mcp.py        # Gmail-focused automated tests
 |-- frontend/
+    |-- auth.css
+    |-- auth.js
+    |-- login.html
+    |-- signup.html
+    |-- forgot-password.html
+    |-- reset-password.html
     |-- app.js
     |-- email-intent.js
     |-- email-intent.test.cjs
@@ -151,11 +181,12 @@ A draft must be reviewed and explicitly confirmed in the UI before it can be sen
     |-- styles.css
 ```
 
-Local-only files may also exist: `.env`, `credentials.json`, `token.json`, `token.json.bak`, `saspal.db`, `.venv/`, and `__pycache__/`. They are not project source and must not be added to Git.
+Local-only files may also exist: `.env`, `credentials.json`, `token.json`, `token.json.bak`, `saspal.db`, `auth.sqlite3`, `.venv/`, and `__pycache__/`. They are not project source and must not be added to Git.
 
 ## Important security warnings
 
 - Never commit or publish `credentials.json`, `token.json`, `token.json.bak`, `.env`, or any copied OAuth/API secret.
+- Treat `auth.sqlite3` as private user data. It contains account records, password hashes, and session/reset-token hashes.
 - If a secret is accidentally committed, removing it in a later commit is not sufficient. Revoke or rotate it and clean the repository history.
 - This application has no production authentication layer for web users. Loopback binding limits local exposure but is not a production deployment security boundary.
 - Before deployment, add appropriate user authentication, HTTPS termination, CSRF/origin protections, secret management, access controls, and operational monitoring. Do not expose the current development server directly to the internet.

@@ -2,13 +2,16 @@ import asyncio
 import inspect
 import json
 import os
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from fastapi.testclient import TestClient
 
 import gmail_mcp_server as gmail_mcp
+import auth_store
 import mcp_host
 import web_app
 from web_app import app
@@ -243,8 +246,30 @@ class GmailMCPTests(unittest.TestCase):
         original = web_app.MCPChatHost
         web_app.MCPChatHost = FakeHost
         try:
-            with TestClient(app) as client:
-                response = client.post("/chat", json={"message": "hi there", "history": []})
+            with tempfile.TemporaryDirectory() as temporary_directory:
+                with patch.object(
+                    auth_store,
+                    "AUTH_DATABASE_PATH",
+                    Path(temporary_directory) / "auth.sqlite3",
+                ), TestClient(app) as client:
+                    client.get("/signup")
+                    csrf_token = client.cookies.get(web_app.CSRF_COOKIE)
+                    signup = client.post(
+                        "/auth/signup",
+                        json={
+                            "full_name": "Test Member",
+                            "email": "member@example.net",
+                            "password": "Correct-Horse-42!",
+                            "password_confirmation": "Correct-Horse-42!",
+                        },
+                        headers={"X-CSRF-Token": csrf_token},
+                    )
+                    self.assertEqual(signup.status_code, 200)
+                    response = client.post(
+                        "/chat",
+                        json={"message": "hi there", "history": []},
+                        headers={"X-CSRF-Token": client.cookies.get(web_app.CSRF_COOKIE)},
+                    )
             self.assertEqual(response.status_code, 200)
             self.assertIn("echo: hi there", response.json()["response"])
         finally:

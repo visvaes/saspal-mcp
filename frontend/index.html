@@ -55,11 +55,12 @@
           <div>
             <div class="eyebrow"><span class="eyebrow-line"></span> PERSONAL INBOX</div>
             <h1>SASPAL Gmail AI Assistant</h1>
-            <p>Good morning. What would you like to find?</p>
+            <p>Ask me about Gmail, or chat about anything else.</p>
           </div>
           <div class="heading-actions">
             <div class="secure-badge"><span aria-hidden="true">✳</span> Private session</div>
             <button id="clear-conversation" class="clear-button" type="button">Clear Conversation</button>
+            <button id="logout-button" class="clear-button" type="button">Sign Out</button>
           </div>
         </div>
 
@@ -68,7 +69,7 @@
             <div class="avatar assistant-avatar" aria-hidden="true">S</div>
             <div class="message-content">
               <div class="message-meta"><strong>SASPAL Assistant</strong><span>NOW</span></div>
-              <div class="bubble assistant-bubble">Hi, I can search Gmail, open messages, or prepare an email for your review.</div>
+              <div class="bubble assistant-bubble">Hi! I'm your SASPAL Gmail Assistant. I can help you search, summarize, and understand your emails, or answer general questions.</div>
             </div>
           </div>
         </div>
@@ -76,7 +77,7 @@
         <div class="composer-area">
           <form class="composer" id="chat-form">
             <label class="sr-only" for="message-input">Message the Gmail assistant</label>
-            <textarea id="message-input" name="message" rows="1" maxlength="4000" placeholder="Ask about your Gmail…" required></textarea>
+            <textarea id="message-input" name="message" rows="1" maxlength="4000" placeholder="Ask me anything, including questions about your Gmail…" required></textarea>
             <button class="send-button" id="send-button" type="submit"><span>Send</span><span class="send-arrow" aria-hidden="true">↑</span></button>
           </form>
           <div class="composer-foot"><span>Email drafts require confirmation to send</span><span>Enter to send <span class="key-hint">↵</span></span></div>
