@@ -38,6 +38,9 @@ test("recognizes the supported explicit send phrases", () => {
     "Email recipient@example.test",
     "Email recipient@example.test with subject \"Hello\" and message \"Hi\"",
     "Compose an email to recipient@example.test",
+    "Draft an email to recipient@example.test",
+    "Can you write an email to recipient@example.test",
+    "I want to create an email to recipient@example.test",
     "Send an email to recipient@example.test",
     "Send a hi message to this mail visvaes1026@gmail.com",
   ]) {
@@ -45,10 +48,72 @@ test("recognizes the supported explicit send phrases", () => {
   }
 });
 
+test("routes natural draft requests to review instead of general chat", async () => {
+  const requestText = "Can you draft an email to recipient@example.test about the project meeting?";
+  let preparedRequest;
+  let reviewOpened = false;
+  const handled = await routeEmailSendRequest(requestText, {
+    prepareDraft: async (request) => {
+      preparedRequest = request;
+      return { draft_id: "synthetic-draft-id" };
+    },
+    openReview: () => { reviewOpened = true; },
+    openRecipientEntry: () => assert.fail("Recipient should have been extracted"),
+  });
+
+  assert.equal(handled, true);
+  assert.equal(preparedRequest.to, "recipient@example.test");
+  assert.match(preparedRequest.instructions, /draft an email/i);
+  assert.equal(reviewOpened, true);
+});
+
 test("shorthand send request becomes a draft request", () => {
   const request = parseEmailSendRequest("send a hi msg to recipient@example.test");
   assert.equal(request.to, "recipient@example.test");
   assert.match(request.instructions, /hi/i);
+});
+
+test("extracts a pasted email and turns it into a reply draft", () => {
+  const request = parseEmailSendRequest(
+    "---\n**To:** old-recipient@example.test\n**Subject:** Project update\n\nHi Visva,\n\nThe project meeting is Monday.\n\nRegards,\nSASPAL Technologies\n\nsend this message to this mail visvaes1026@gmail.com"
+  );
+
+  assert.equal(request.to, "visvaes1026@gmail.com");
+  assert.equal(request.subject, null);
+  assert.equal(request.body, null);
+  assert.match(request.instructions, /analyz|reply/i);
+});
+
+test("recognizes the direct send-this-message form and prepares a reply instead of forwarding it", () => {
+  const request = parseEmailSendRequest(
+    "Hi Visva,\n\nThe project meeting is Monday.\n\nsend this message to visvaes1026@gmail.com"
+  );
+
+  assert.equal(request.to, "visvaes1026@gmail.com");
+  assert.equal(request.subject, null);
+  assert.equal(request.body, null);
+  assert.match(request.instructions, /analyz|reply/i);
+});
+
+test("routes a pasted message through draft review as a reply draft", async () => {
+  const requestText =
+    "Hi Visva,\n\nThe project meeting is Monday.\n\nsend this message to this mail recipient@example.test";
+  let preparedRequest;
+  let reviewOpened = false;
+  const handled = await routeEmailSendRequest(requestText, {
+    prepareDraft: async (request) => {
+      preparedRequest = request;
+      return { draft_id: "synthetic-draft-id" };
+    },
+    openReview: () => { reviewOpened = true; },
+    openRecipientEntry: () => assert.fail("Recipient should have been extracted"),
+  });
+
+  assert.equal(handled, true);
+  assert.equal(preparedRequest.to, "recipient@example.test");
+  assert.equal(preparedRequest.body, null);
+  assert.match(preparedRequest.instructions, /analyz|reply/i);
+  assert.equal(reviewOpened, true);
 });
 
 test("keeps subject and body marker words inside the email text", () => {

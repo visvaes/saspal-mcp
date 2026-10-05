@@ -36,6 +36,21 @@ async function postAuth(path, values) {
   return payload;
 }
 
+async function gmailStatus() {
+  const response = await fetch("/api/gmail-status", {
+    method: "GET",
+    credentials: "same-origin",
+    headers: {
+      "X-CSRF-Token": getCookie("saspal_csrf"),
+    },
+  });
+  const payload = await response.json().catch(() => ({ connected: false }));
+  if (!response.ok) {
+    throw new Error(payload?.detail || "Could not check Gmail status.");
+  }
+  return Boolean(payload.connected);
+}
+
 if (authForm) {
   authForm.addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -51,13 +66,15 @@ if (authForm) {
       }
 
       switch (authForm.dataset.authForm) {
-        case "login":
+        case "login": {
           await postAuth("/auth/login", values);
-          window.location.assign(safeReturnPath());
+          const connected = await gmailStatus();
+          window.location.assign(connected ? safeReturnPath() : "/connect-gmail");
           break;
+        }
         case "signup":
           await postAuth("/auth/signup", values);
-          window.location.assign("/");
+          window.location.assign("/connect-gmail");
           break;
         case "forgot":
           await postAuth("/auth/forgot-password", values);
@@ -73,6 +90,25 @@ if (authForm) {
           });
           window.location.assign("/login?reset=complete");
           break;
+        }
+        case "connect-gmail": {
+          const response = await fetch("/api/gmail/connect", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: {
+              "Content-Type": "application/json",
+              "X-CSRF-Token": getCookie("saspal_csrf"),
+            },
+          });
+          const payload = await response.json().catch(() => null);
+          if (!response.ok) {
+            throw new Error(payload?.detail || "Could not connect Gmail.");
+          }
+          if (payload?.connected) {
+            window.location.assign("/");
+            return;
+          }
+          throw new Error("Gmail is still not connected.");
         }
         default:
           throw new Error("This form is unavailable.");

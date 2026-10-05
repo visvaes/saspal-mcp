@@ -671,9 +671,59 @@ if (clearConversationButton) {
   });
 }
 
+async function updateGmailConnectionStatus() {
+  const status = document.querySelector("#gmail-connection-status");
+  if (!status) return;
+  const warning = document.querySelector("#gmail-access-warning");
+  const accessRow = document.querySelector("#gmail-access-row");
+  const accessLabel = document.querySelector("#gmail-access-label");
+  const accessIndicator = document.querySelector("#gmail-access-indicator");
+
+  function renderConnectionState(connected) {
+    status.classList.toggle("is-disconnected", !connected);
+    if (warning) warning.hidden = connected;
+    if (accessRow) accessRow.classList.toggle("is-disconnected", !connected);
+    if (accessLabel) accessLabel.textContent = connected ? "Send requires confirmation" : "Connection required";
+    if (accessIndicator) {
+      accessIndicator.textContent = connected ? "✓" : "!";
+      accessIndicator.setAttribute("aria-label", connected ? "Connected" : "Not connected");
+    }
+    if (composeEmailButton) {
+      composeEmailButton.disabled = !connected;
+      composeEmailButton.title = connected ? "" : "Connect Gmail to compose emails";
+    }
+  }
+
+  try {
+    const response = await fetch("/api/gmail-status", {
+      credentials: "same-origin",
+      headers: {
+        "X-CSRF-Token": readCsrfToken(),
+      },
+    });
+    const payload = await response.json().catch(() => ({ connected: false }));
+    const connected = response.ok && Boolean(payload.connected);
+    renderConnectionState(connected);
+    status.innerHTML = connected
+      ? '<span class="status-dot"></span> Gmail connected <span class="status-separator">·</span> Send requires confirmation'
+      : '<span class="status-dot"></span> Gmail access required <span class="status-separator">·</span> <a href="/connect-gmail">Connect Gmail</a>';
+  } catch {
+    renderConnectionState(false);
+    status.innerHTML = '<span class="status-dot"></span> Gmail access required <span class="status-separator">·</span> <a href="/connect-gmail">Connect Gmail</a>';
+  }
+}
+
 function readCsrfToken() {
   const cookie = document.cookie.split(";").map((value) => value.trim()).find((value) => value.startsWith("saspal_csrf="));
   return cookie ? decodeURIComponent(cookie.slice("saspal_csrf=".length)) : "";
+}
+
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", () => {
+    void updateGmailConnectionStatus();
+  });
+} else {
+  void updateGmailConnectionStatus();
 }
 
 if (logoutButton) {

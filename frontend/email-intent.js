@@ -5,9 +5,13 @@
   }
   root.SASPAL_EMAIL_INTENT = emailIntent;
 })(globalThis, function createEmailIntentModule() {
-  const SEND_INTENT = /^\s*(?:please\s+)?(?:send\b|compose\b|email\b)/i;
+  const SEND_INTENT = /^\s*(?:(?:(?:can|could|would)\s+you|i want to|i need to|help me)\s+(?:please\s+)?)?(?:please\s+)?(?:send\b|compose\b|email\b|draft\b|write\b|create\b)/i;
   const SEND_CONTEXT = /\b(?:to|for|this\s+(?:mail|email)|(?:mail|email))\b|[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?/i;
   const EMAIL_ADDRESS = /[A-Z0-9.!#$%&'*+/=?^_`{|}~-]+@(?:[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?\.)+[A-Z0-9](?:[A-Z0-9-]{0,61}[A-Z0-9])?/i;
+  const TRAILING_SEND_INTENT = new RegExp(
+    `\\b(?:please\\s+)?send\\s+(?:this\\s+)?(?:message|mail|email)?\\s*to\\s+(?:this\\s+)?(?:mail|email)?\\s*[:,-]?\\s*(${EMAIL_ADDRESS.source})\\s*[.!?]*$`,
+    "i"
+  );
   const QUOTE_PAIRS = new Map([
     ['"', '"'],
     ["'", "'"],
@@ -107,12 +111,48 @@
     return markers;
   }
 
+  function parseTrailingSendRequest(message) {
+    const intentMatch = TRAILING_SEND_INTENT.exec(message);
+    if (!intentMatch) return null;
+
+    const emailContent = message.slice(0, intentMatch.index).trim();
+    if (!emailContent) return null;
+
+    const lines = emailContent.split(/\r?\n/);
+    let subject = null;
+    const contentLines = lines.filter((line) => {
+      const subjectMatch = line.match(
+        /^\s*(?:[-*]\s*)?\*{0,2}subject\*{0,2}\s*:\*{0,2}\s*(.*?)\s*$/i
+      );
+      if (subjectMatch) {
+        subject = subjectMatch[1].trim() || null;
+        return false;
+      }
+      if (/^\s*(?:[-*]\s*)?\*{0,2}to\*{0,2}\s*:\*{0,2}\s*.*$/i.test(line)) {
+        return false;
+      }
+      return !/^\s*---+\s*$/.test(line);
+    });
+    const body = contentLines.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+    if (!body) return null;
+
+    return {
+      to: intentMatch[1].replace(/[.!?]+$/, ""),
+      subject: null,
+      body: null,
+      instructions: `Analyze the email below and draft a clear, professional reply to the sender. Keep the reply helpful and direct, and include an appropriate subject line. Email content to analyze:\n\n${body}`,
+    };
+  }
+
   function parseEmailSendRequest(message) {
     if (typeof message !== "string") {
       return null;
     }
 
     const normalizedMessage = stripOuterQuotes(message);
+    const trailingRequest = parseTrailingSendRequest(normalizedMessage);
+    if (trailingRequest) return trailingRequest;
+
     const intentMatch = normalizedMessage.match(SEND_INTENT);
     if (!intentMatch || !SEND_CONTEXT.test(normalizedMessage)) {
       return null;

@@ -172,6 +172,26 @@ def require_authenticated_user(request: Request) -> dict[str, object]:
     return session
 
 
+def gmail_is_connected() -> bool:
+    try:
+        import gmail_mcp_server
+
+        gmail_mcp_server.get_gmail_service()
+        return True
+    except Exception:
+        return False
+
+
+def connect_gmail() -> bool:
+    try:
+        from gmail_test import get_credentials
+
+        get_credentials()
+        return gmail_is_connected()
+    except Exception as error:
+        raise RuntimeError("Gmail connection failed. Please try again.") from error
+
+
 def _with_csrf_cookie(response: Response, request: Request) -> Response:
     if not request.cookies.get(CSRF_COOKIE):
         response.set_cookie(
@@ -283,6 +303,29 @@ async def index(request: Request) -> Response:
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/connect-gmail", include_in_schema=False)
+async def connect_gmail_page(request: Request) -> Response:
+    if _current_session(request) is None:
+        return RedirectResponse("/login?next=/connect-gmail", status_code=303)
+    return FileResponse(FRONTEND_DIR / "connect-gmail.html")
+
+
+@app.get("/api/gmail-status")
+async def gmail_status(user: dict[str, object] = Depends(require_authenticated_user)) -> dict[str, bool]:
+    return {"connected": gmail_is_connected()}
+
+
+@app.post("/api/gmail/connect")
+async def gmail_connect(
+    request: Request,
+    user: dict[str, object] = Depends(require_authenticated_user),
+) -> dict[str, bool]:
+    try:
+        return {"connected": connect_gmail()}
+    except RuntimeError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from None
 
 
 @app.post("/auth/signup")
@@ -458,6 +501,8 @@ async def chat_stream(
 async def recent_emails(
     user: dict[str, object] = Depends(require_authenticated_user),
 ) -> list[dict[str, object]]:
+    if not gmail_is_connected():
+        raise HTTPException(status_code=403, detail="Connect Gmail to use email features.")
     try:
         return await app.state.chat_host.get_recent_emails(max_results=10)
     except Exception as error:
@@ -471,6 +516,8 @@ async def recent_emails(
 async def unread_count(
     user: dict[str, object] = Depends(require_authenticated_user),
 ) -> dict[str, int]:
+    if not gmail_is_connected():
+        raise HTTPException(status_code=403, detail="Connect Gmail to use email features.")
     try:
         return {"count": await app.state.chat_host.get_unread_count()}
     except Exception as error:
@@ -485,6 +532,8 @@ async def search_emails(
     request: SearchRequest,
     user: dict[str, object] = Depends(require_authenticated_user),
 ) -> list[dict[str, object]]:
+    if not gmail_is_connected():
+        raise HTTPException(status_code=403, detail="Connect Gmail to use email features.")
     try:
         return await app.state.chat_host.search_emails(request.query, request.max_results)
     except Exception as error:
@@ -499,6 +548,8 @@ async def date_search(
     request: DateSearchRequest,
     user: dict[str, object] = Depends(require_authenticated_user),
 ) -> list[dict[str, object]]:
+    if not gmail_is_connected():
+        raise HTTPException(status_code=403, detail="Connect Gmail to use email features.")
     try:
         return await app.state.chat_host.search_by_date(
             request.start_date,
@@ -536,6 +587,8 @@ async def confirm_email_draft(
     request: EmailDraftActionRequest,
     user: dict[str, object] = Depends(require_authenticated_user),
 ) -> dict[str, str]:
+    if not gmail_is_connected():
+        raise HTTPException(status_code=403, detail="Connect Gmail to send email.")
     try:
         return await app.state.chat_host.confirm_email_draft(request.draft_id)
     except LookupError as error:
@@ -558,6 +611,8 @@ async def open_email(
     message_id: str,
     user: dict[str, object] = Depends(require_authenticated_user),
 ) -> dict[str, object]:
+    if not gmail_is_connected():
+        raise HTTPException(status_code=403, detail="Connect Gmail to use email features.")
     if not message_id.strip():
         raise HTTPException(status_code=400, detail="Email message ID is required.")
 

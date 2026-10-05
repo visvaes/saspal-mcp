@@ -71,6 +71,8 @@ button { -webkit-tap-highlight-color: transparent; }
 .brand-divider { margin: 0 7px; color: #aab4ad; font-weight: 500; }
 .connection-status { display: flex; align-items: center; gap: 8px; color: #53625b; font-size: 12px; font-weight: 600; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; background: #4a9c71; box-shadow: 0 0 0 3px #e8f3eb; }
+.connection-status.is-disconnected { color: #963f32; }
+.connection-status.is-disconnected .status-dot { background: #c64e3e; box-shadow: 0 0 0 3px #fae8e4; }
 .status-separator { color: #b0b9b2; }
 
 .workspace { min-height: 0; flex: 1; display: grid; grid-template-columns: 226px minmax(0, 1fr); }
@@ -87,14 +89,25 @@ button { -webkit-tap-highlight-color: transparent; }
 .sidebar-bottom { margin-top: auto; }
 .account-label { margin-bottom: 11px; }
 .access-row { min-height: 54px; padding: 8px 9px; border: 1px solid var(--line); border-radius: 6px; display: flex; align-items: center; gap: 9px; }
+.access-row.is-disconnected { border-color: #efc9c1; background: #fff8f6; }
 .access-icon { width: 28px; height: 28px; border-radius: 6px; background: #f5ece8; color: #b65f46; display: grid; place-items: center; font: 800 12px 'Manrope', sans-serif; }
 .access-row strong, .access-row small { display: block; }
 .access-row strong { font-size: 11px; }
 .access-row small { margin-top: 3px; color: var(--muted); font-size: 10px; }
 .access-check { margin-left: auto; color: #438a62; font-size: 15px; }
+.access-row.is-disconnected .access-check { color: #b74737; }
 
 .chat-panel { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
 .chat-heading { min-height: 128px; padding: 25px 38px 21px; border-bottom: 1px solid #edf0ed; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.gmail-access-warning { margin: 16px 38px 0; padding: 13px 15px; border: 1px solid #edbdb4; border-left: 4px solid #c64e3e; border-radius: 6px; color: #7f352b; background: #fff4f1; display: flex; align-items: center; gap: 12px; }
+.gmail-access-warning[hidden] { display: none; }
+.warning-symbol { width: 24px; height: 24px; flex: 0 0 24px; border-radius: 50%; color: white; background: #c64e3e; display: grid; place-items: center; font: 800 14px 'Manrope', sans-serif; }
+.warning-copy { min-width: 0; display: grid; gap: 3px; font-size: 12px; line-height: 1.4; }
+.warning-copy strong { font-size: 12px; }
+.warning-copy span { color: #87534a; }
+.warning-action { margin-left: auto; padding: 8px 11px; border-radius: 5px; color: white; background: #a94033; font-size: 11px; font-weight: 700; text-decoration: none; white-space: nowrap; }
+.warning-action:hover { color: white; background: #87372d; text-decoration: none; }
+.warning-action span { margin-left: 5px; }
 .eyebrow { display: flex; align-items: center; gap: 7px; color: #718078; font: 700 9px 'Manrope', sans-serif; letter-spacing: 0.14em; }
 .eyebrow-line { width: 17px; height: 2px; border-radius: 2px; background: var(--coral); }
 h1 { margin: 8px 0 4px; color: var(--ink); font: 800 23px 'Manrope', 'Segoe UI', sans-serif; letter-spacing: 0; }
@@ -316,6 +329,10 @@ textarea::placeholder { color: #9aa59f; }
   .shortcut-icon { width: auto; font-size: 13px; }
   .chat-panel { flex: 1; }
   .chat-heading { min-height: 112px; padding: 18px 19px; }
+  .gmail-access-warning { margin: 12px 16px 0; padding: 11px; align-items: flex-start; gap: 9px; }
+  .warning-copy { font-size: 10px; }
+  .warning-copy strong { font-size: 11px; }
+  .warning-action { align-self: center; padding: 7px 8px; font-size: 10px; }
   h1 { font-size: 19px; }
   .chat-heading p { font-size: 11px; }
   .secure-badge { margin-top: 5px; padding: 6px 7px; font-size: 9px; }

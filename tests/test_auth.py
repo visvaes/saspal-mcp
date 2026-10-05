@@ -119,6 +119,28 @@ class AuthenticationTests(unittest.TestCase):
         self.assertNotIn(secret, response.text)
         self.assertEqual(response.json(), {"detail": "Invalid authentication request."})
 
+    def test_gmail_connection_requires_an_explicit_connect_step(self):
+        self.assertEqual(self.signup().status_code, 200)
+
+        response = self.client.get("/connect-gmail")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Connect Gmail", response.text)
+
+        with patch.object(web_app, "gmail_is_connected", return_value=False):
+            status = self.client.get("/api/gmail-status")
+            self.assertEqual(status.status_code, 200)
+            self.assertEqual(status.json(), {"connected": False})
+
+        with patch.object(web_app, "gmail_is_connected", return_value=True):
+            status = self.client.get("/api/gmail-status")
+            self.assertEqual(status.status_code, 200)
+            self.assertEqual(status.json(), {"connected": True})
+
+        with patch.object(web_app, "connect_gmail", return_value=True):
+            connect = self.client.post("/api/gmail/connect", headers=self.csrf_headers())
+            self.assertEqual(connect.status_code, 200)
+            self.assertTrue(connect.json()["connected"])
+
     def test_login_protected_api_and_logout(self):
         self.assertEqual(self.signup().status_code, 200)
         self.assertEqual(self.client.get("/auth/me").json()["email"], "member@example.net")

@@ -6,7 +6,7 @@
   <meta name="theme-color" content="#f3f6f3">
   <title>SASPAL Gmail AI Assistant</title>
   <link rel="stylesheet" href="/static/styles.css">
-  <script src="/static/email-intent.js" defer></script>
+  <script src="/static/email-intent.js?v=20261005-draft-intent" defer></script>
   <script src="/static/app.js" defer></script>
 </head>
 <body>
@@ -16,7 +16,7 @@
         <span class="brand-mark" aria-hidden="true">S</span>
         <span class="brand-name">SASPAL<span class="brand-divider">/</span>MAIL</span>
       </a>
-      <div class="connection-status"><span class="status-dot"></span> Gmail connected <span class="status-separator">·</span> Send requires confirmation</div>
+      <div class="connection-status is-disconnected" id="gmail-connection-status"><span class="status-dot"></span> Gmail access required <span class="status-separator">·</span> Connect Gmail to read or send mail</div>
     </header>
 
     <div class="workspace">
@@ -46,7 +46,7 @@
 
         <div class="sidebar-bottom">
           <div class="account-label">ACCESS</div>
-          <div class="access-row"><span class="access-icon" aria-hidden="true">G</span><span><strong>Gmail</strong><small>Send requires confirmation</small></span><span class="access-check" aria-label="Connected">✓</span></div>
+          <div class="access-row is-disconnected" id="gmail-access-row"><span class="access-icon" aria-hidden="true">G</span><span><strong>Gmail</strong><small id="gmail-access-label">Connection required</small></span><span class="access-check" id="gmail-access-indicator" aria-label="Not connected">!</span></div>
         </div>
       </aside>
 
@@ -63,6 +63,12 @@
             <button id="logout-button" class="clear-button" type="button">Sign Out</button>
           </div>
         </div>
+
+        <aside class="gmail-access-warning" id="gmail-access-warning" role="status" aria-live="polite">
+          <span class="warning-symbol" aria-hidden="true">!</span>
+          <div class="warning-copy"><strong>Gmail access required</strong><span>Connect your account before reading or sending email.</span></div>
+          <a class="warning-action" href="/connect-gmail">Connect Gmail <span aria-hidden="true">→</span></a>
+        </aside>
 
         <div class="conversation" id="conversation" role="log" aria-live="polite" aria-relevant="additions">
           <div class="message-row assistant-row">
