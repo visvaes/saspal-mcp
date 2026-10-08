@@ -33,7 +33,8 @@ class _ConnectionAdapter:
 @contextmanager
 def _connection() -> Iterator[_ConnectionAdapter]:
     database_url = os.getenv("DATABASE_URL")
-    if os.getenv("VERCEL") == "1" and not database_url:
+    is_vercel = os.getenv("VERCEL") == "1" or bool(os.getenv("VERCEL_ENV"))
+    if is_vercel and not database_url:
         raise RuntimeError("DATABASE_URL must point to a managed PostgreSQL database on Vercel.")
 
     if database_url:
