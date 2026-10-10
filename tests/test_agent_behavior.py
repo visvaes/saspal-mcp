@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 import auth_store
 import mcp_host
+import saspal_mcp_server
 import web_app
 
 
@@ -101,11 +102,61 @@ class AgentBehaviorTests(unittest.TestCase):
     def test_vercel_entrypoint_targets_the_fastapi_app_not_test_imports(self):
         project_root = Path(__file__).resolve().parents[1]
         config = (project_root / "pyproject.toml").read_text(encoding="utf-8")
+        vercel_config = json.loads(
+            (project_root / "vercel.json").read_text(encoding="utf-8")
+        )
 
         self.assertIn("[project]", config)
         self.assertIn('requires-python = ">=3.10"', config)
         self.assertIn('[tool.vercel]\nentrypoint = "web_app:app"', config)
         self.assertIn("[tool.uv]\npackage = false", config)
+        self.assertEqual((project_root / ".python-version").read_text().strip(), "3.12")
+        function_config = vercel_config["functions"]["web_app.py"]
+        self.assertEqual(function_config["includeFiles"], "frontend/**")
+        for excluded_name in ("credentials.json", "token.json", "auth.sqlite3", "saspal.db"):
+            self.assertIn(excluded_name, function_config["excludeFiles"])
+
+    def test_vercel_mcp_startup_uses_registered_servers_without_stdio(self):
+        async def start_serverless_host():
+            with patch.dict(os.environ, {"VERCEL": "1"}, clear=True):
+                with patch("mcp_host.stdio_client", side_effect=AssertionError("stdio must not start")):
+                    host = mcp_host.MCPChatHost()
+                    await host.start()
+                    self.assertEqual(len(host.tool_names), 15)
+                    self.assertIn("send_email", host._tool_to_session)
+                    self.assertNotIn(
+                        "send_email",
+                        {tool["function"]["name"] for tool in host.tools},
+                    )
+                    await host.close()
+
+        asyncio.run(start_serverless_host())
+
+    def test_vercel_fastapi_lifespan_starts_without_openrouter_key_or_stdio(self):
+        with (
+            patch.dict(os.environ, {"VERCEL": "1"}, clear=True),
+            patch.object(web_app.auth_store, "initialize_auth_database"),
+            patch("mcp_host.stdio_client", side_effect=AssertionError("stdio must not start")),
+            TestClient(web_app.app) as client,
+        ):
+            self.assertEqual(client.get("/health").status_code, 200)
+            self.assertEqual(client.get("/login").status_code, 200)
+            self.assertEqual(
+                client.get("/", follow_redirects=False).status_code,
+                303,
+            )
+            self.assertEqual(len(client.app.state.chat_host.tool_names), 15)
+
+    def test_vercel_company_mcp_uses_in_memory_catalog_without_sqlite(self):
+        with (
+            patch.dict(os.environ, {"VERCEL": "1"}),
+            patch.object(saspal_mcp_server, "DATABASE_PATH", Path("missing-company.db")),
+        ):
+            services = saspal_mcp_server.get_services()
+            results = saspal_mcp_server.search_company_info("AI-assisted")
+
+        self.assertIsInstance(services, list)
+        self.assertTrue(any(item["label"] == "AI-assisted workflow development" for item in results))
 
     def test_greeting_is_conversational_without_a_gmail_tool_call(self):
         response = self.answer("hi", [model_response("Hi! How can I help you with your Gmail?")])

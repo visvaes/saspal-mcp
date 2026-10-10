@@ -1,4 +1,5 @@
 import sqlite3
+import os
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
@@ -149,6 +150,20 @@ def _database_connection() -> Iterator[sqlite3.Connection]:
         connection.close()
 
 
+def _catalog_records() -> list[dict[str, object]]:
+    return [
+        {
+            "id": index,
+            "category": category,
+            "title": title,
+            "content": content,
+            "created_at": None,
+            "updated_at": None,
+        }
+        for index, (category, title, content) in enumerate(_COMPANY_INFO_RECORDS, start=1)
+    ]
+
+
 def initialize_database() -> int:
     """Create the local schema and seed verified SASPAL records once.
 
@@ -212,6 +227,11 @@ def get_company_info() -> list[dict[str, object]]:
 
 def get_info_by_category(category: str) -> list[dict[str, object]]:
     """Return all records in a category, ordered by title."""
+    if os.getenv("VERCEL") == "1":
+        return sorted(
+            (record for record in _catalog_records() if record["category"] == category),
+            key=lambda record: str(record["title"]),
+        )
     with _database_connection() as connection:
         rows = connection.execute(
             """
@@ -230,6 +250,15 @@ def search_company_info(query: str) -> list[dict[str, object]]:
     query = query.strip()
     if not query:
         return []
+
+    if os.getenv("VERCEL") == "1":
+        lowered_query = query.casefold()
+        return [
+            record
+            for record in _catalog_records()
+            if lowered_query in str(record["title"]).casefold()
+            or lowered_query in str(record["content"]).casefold()
+        ]
 
     with _database_connection() as connection:
         rows = connection.execute(

@@ -38,6 +38,16 @@ def _connection() -> Iterator[_ConnectionAdapter]:
         raise RuntimeError("DATABASE_URL must point to a managed PostgreSQL database on Vercel.")
 
     if database_url:
+        print("DATABASE_URL is set:", bool(database_url))
+        print(
+        "Starts with PostgreSQL scheme:",
+        database_url.startswith(("postgresql://", "postgres://"))
+    )
+        print(
+        "Contains unexpected environment variable:",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY" in database_url
+    )
+        print("Number of lines:", len(database_url.splitlines()))
         try:
             import psycopg
             from psycopg.rows import dict_row

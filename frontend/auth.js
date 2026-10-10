@@ -104,6 +104,10 @@ if (authForm) {
           if (!response.ok) {
             throw new Error(payload?.detail || "Could not connect Gmail.");
           }
+          if (typeof payload?.authorization_url === "string") {
+            window.location.assign(payload.authorization_url);
+            return;
+          }
           if (payload?.connected) {
             window.location.assign("/");
             return;

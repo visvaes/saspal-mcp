@@ -668,15 +668,20 @@ class MCPChatHost:
     """Reusable OpenRouter and MCP session for CLI or web requests."""
 
     def __init__(self) -> None:
+        self._vercel_runtime = os.getenv("VERCEL") == "1"
         api_key = os.getenv("OPENROUTER_API_KEY")
-        if not api_key:
+        if not api_key and not self._vercel_runtime:
             raise RuntimeError("OPENROUTER_API_KEY is missing from .env or the environment.")
-        self.client = OpenAI(api_key=api_key, base_url=OPENROUTER_BASE_URL)
+        self.client = (
+            OpenAI(api_key=api_key, base_url=OPENROUTER_BASE_URL)
+            if api_key
+            else None
+        )
         self._stack = AsyncExitStack()
         self._lock = asyncio.Lock()
-        self.session: ClientSession | None = None
-        self.sessions: list[ClientSession] = []
-        self._tool_to_session: dict[str, ClientSession] = {}
+        self.session: Any | None = None
+        self.sessions: list[Any] = []
+        self._tool_to_session: dict[str, Any] = {}
         self.tool_sources: dict[str, str] = {}
         self.tools: list[dict[str, Any]] = []
         self.tools_by_name: dict[str, Any] = {}
@@ -684,6 +689,14 @@ class MCPChatHost:
         self.tool_names: list[str] = []
         self._email_drafts: dict[str, dict[str, Any]] = {}
         self._email_drafts_lock = asyncio.Lock()
+
+    def _openrouter_client(self) -> OpenAI:
+        if self.client is None:
+            api_key = os.getenv("OPENROUTER_API_KEY")
+            if not api_key:
+                raise RuntimeError("OPENROUTER_API_KEY is not configured for this deployment.")
+            self.client = OpenAI(api_key=api_key, base_url=OPENROUTER_BASE_URL)
+        return self.client
 
     async def start(self) -> None:
         await self._stack.__aenter__()
@@ -695,6 +708,37 @@ class MCPChatHost:
             self.tools_by_name = {}
             self.prompt_names = set()
             self.tool_names = []
+
+            if self._vercel_runtime:
+                from gmail_mcp_server import mcp as gmail_server
+                from saspal_mcp_server import mcp as company_server
+
+                for server, source in (
+                    (gmail_server, "Gmail MCP"),
+                    (company_server, "SASPAL Technologies MCP"),
+                ):
+                    if self.session is None:
+                        self.session = server
+                    self.sessions.append(server)
+                    tools = await server.list_tools()
+                    for tool in tools:
+                        self._tool_to_session[tool.name] = server
+                        self.tool_sources[tool.name] = source
+                        self.tool_names.append(tool.name)
+                    server_tools, tools_by_name = _openrouter_tools(tools)
+                    if source == "Gmail MCP":
+                        server_tools = [
+                            tool for tool in server_tools
+                            if tool["function"]["name"] != "send_email"
+                        ]
+                        tools_by_name = {
+                            name: tool
+                            for name, tool in tools_by_name.items()
+                            if name != "send_email"
+                        }
+                    self.tools.extend(server_tools)
+                    self.tools_by_name.update(tools_by_name)
+                return
 
             for server_file in SERVER_FILES:
                 if not server_file.is_file():
@@ -758,6 +802,7 @@ class MCPChatHost:
         *,
         subject: str | None = None,
         body: str | None = None,
+        user_id: int | None = None,
     ) -> dict[str, str]:
         """Generate a reviewable draft without exposing or invoking the send tool."""
         recipient = to.strip()
@@ -786,8 +831,9 @@ class MCPChatHost:
                 ensure_ascii=False,
             )
             try:
+                client = self._openrouter_client()
                 response = await asyncio.to_thread(
-                    self.client.chat.completions.create,
+                    client.chat.completions.create,
                     model=os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL),
                     messages=[
                         {
@@ -824,19 +870,32 @@ class MCPChatHost:
             raise RuntimeError("The generated email draft was invalid. Please try again.")
 
         draft_id = secrets.token_urlsafe(32)
-        async with self._email_drafts_lock:
-            now = time.monotonic()
-            self._email_drafts = {
-                key: value
-                for key, value in self._email_drafts.items()
-                if value["expires_at"] > now
-            }
-            self._email_drafts[draft_id] = {
-                "to": recipient,
-                "subject": subject.strip(),
-                "body": body.strip(),
-                "expires_at": now + EMAIL_DRAFT_TTL_SECONDS,
-            }
+        if self._vercel_runtime:
+            if user_id is None:
+                raise RuntimeError("An authenticated user is required to store an email draft.")
+            import auth_store
+
+            auth_store.store_pending_email_draft(
+                user_id,
+                draft_id,
+                recipient,
+                subject.strip(),
+                body.strip(),
+            )
+        else:
+            async with self._email_drafts_lock:
+                now = time.monotonic()
+                self._email_drafts = {
+                    key: value
+                    for key, value in self._email_drafts.items()
+                    if value["expires_at"] > now
+                }
+                self._email_drafts[draft_id] = {
+                    "to": recipient,
+                    "subject": subject.strip(),
+                    "body": body.strip(),
+                    "expires_at": now + EMAIL_DRAFT_TTL_SECONDS,
+                }
         return {
             "draft_id": draft_id,
             "to": recipient,
@@ -844,16 +903,35 @@ class MCPChatHost:
             "body": body.strip(),
         }
 
-    async def cancel_email_draft(self, draft_id: str) -> bool:
+    async def cancel_email_draft(self, draft_id: str, user_id: int | None = None) -> bool:
         """Discard a pending draft so it cannot later be sent."""
+        if self._vercel_runtime:
+            if user_id is None:
+                return False
+            import auth_store
+
+            return auth_store.cancel_pending_email_draft(user_id, draft_id)
         async with self._email_drafts_lock:
             return self._email_drafts.pop(draft_id, None) is not None
 
-    async def confirm_email_draft(self, draft_id: str) -> dict[str, str]:
+    async def confirm_email_draft(
+        self,
+        draft_id: str,
+        user_id: int | None = None,
+    ) -> dict[str, str]:
         """Consume a pending draft and invoke send_email exactly once."""
-        async with self._email_drafts_lock:
-            draft = self._email_drafts.pop(draft_id, None)
-        if draft is None or draft["expires_at"] <= time.monotonic():
+        if self._vercel_runtime:
+            if user_id is None:
+                raise LookupError("This email draft has expired or was already used.")
+            import auth_store
+
+            draft = auth_store.consume_pending_email_draft(user_id, draft_id)
+        else:
+            async with self._email_drafts_lock:
+                draft = self._email_drafts.pop(draft_id, None)
+            if draft is not None and draft["expires_at"] <= time.monotonic():
+                draft = None
+        if draft is None:
             raise LookupError("This email draft has expired or was already used.")
         if "send_email" not in self._tool_to_session:
             raise RuntimeError("Email sending is unavailable.")
@@ -873,7 +951,8 @@ class MCPChatHost:
 
     async def close(self) -> None:
         await self._stack.aclose()
-        await asyncio.to_thread(self.client.close)
+        if self.client is not None:
+            await asyncio.to_thread(self.client.close)
         self.session = None
         self.sessions = []
         self._tool_to_session = {}
@@ -969,8 +1048,9 @@ class MCPChatHost:
                 }
             )
 
+            client = self._openrouter_client()
             return await _answer_user(
-                self.client,
+                client,
                 self._call_tool,
                 self.tools,
                 self.tools_by_name,

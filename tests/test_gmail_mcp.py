@@ -46,6 +46,27 @@ class GmailMCPTests(unittest.TestCase):
         self.assertIn("reauthorize", gmail_mcp._gmail_auth_error_message("invalid_scope: Bad Request").lower())
         self.assertIn("gmail", gmail_mcp._gmail_auth_error_message("invalid_scope: Bad Request").lower())
 
+    def test_vercel_gmail_service_uses_database_credentials_not_token_file(self):
+        credentials = SimpleNamespace(
+            has_scopes=MagicMock(return_value=True),
+            expired=False,
+            refresh_token=None,
+            valid=True,
+        )
+        token_file = SimpleNamespace(
+            is_file=MagicMock(side_effect=AssertionError("Vercel must not read token.json"))
+        )
+        with (
+            patch.dict(os.environ, {"VERCEL": "1", "DATABASE_URL": "postgresql://example.invalid/test"}),
+            patch.object(auth_store, "get_gmail_credentials", return_value="ciphertext"),
+            patch("gmail_oauth.decrypt_credentials", return_value="{}"),
+            patch.object(gmail_mcp, "TOKEN_FILE", token_file),
+            patch.object(gmail_mcp.Credentials, "from_authorized_user_info", return_value=credentials),
+            patch.object(gmail_mcp, "build", return_value="gmail-service"),
+        ):
+            self.assertEqual(gmail_mcp.get_gmail_service(7), "gmail-service")
+        token_file.is_file.assert_not_called()
+
     def test_search_emails_returns_metadata(self):
         fake_message = {
             "id": "abc123",

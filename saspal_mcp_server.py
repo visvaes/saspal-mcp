@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from typing import TypedDict, cast
 
@@ -45,7 +46,7 @@ _DATABASE_ERROR = {"error": "SASPAL information is temporarily unavailable."}
 
 def _category_records(category: str) -> list[dict[str, object]] | None:
     """Read one information category, returning None if the database is unavailable."""
-    if not DATABASE_PATH.is_file():
+    if not DATABASE_PATH.is_file() and os.getenv("VERCEL") != "1":
         return None
     try:
         return get_info_by_category(category)
@@ -111,7 +112,7 @@ def search_company_info(query: str) -> list[dict[str, str]] | dict[str, str]:
     """Search the SASPAL company information and return the most relevant results for the supplied query."""
     if not query.strip():
         return []
-    if not DATABASE_PATH.is_file():
+    if not DATABASE_PATH.is_file() and os.getenv("VERCEL") != "1":
         return _DATABASE_ERROR.copy()
 
     try:

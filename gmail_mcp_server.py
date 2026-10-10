@@ -1,7 +1,9 @@
 import base64
 import binascii
+import os
 import json
 import re
+from contextvars import ContextVar, Token
 from datetime import date, timedelta
 from email.message import EmailMessage as MIMEEmailMessage
 from email.policy import SMTP
@@ -32,6 +34,7 @@ _EMAIL_ADDRESS = re.compile(
 )
 
 mcp = MCPServer(SERVER_NAME)
+_CURRENT_GMAIL_USER_ID: ContextVar[int | None] = ContextVar("current_gmail_user_id", default=None)
 
 
 class EmailMetadata(TypedDict):
@@ -92,9 +95,57 @@ def _gmail_auth_error_message(error: object | None = None) -> str:
     return "Gmail authentication is unavailable. Reauthorize the Gmail account."
 
 
-@lru_cache(maxsize=1)
-def get_gmail_service() -> Resource:
-    """Create and cache a read-only Gmail API service using token.json."""
+def set_current_gmail_user_id(user_id: int) -> Token[int | None]:
+    return _CURRENT_GMAIL_USER_ID.set(user_id)
+
+
+def reset_current_gmail_user_id(token: Token[int | None]) -> None:
+    _CURRENT_GMAIL_USER_ID.reset(token)
+
+
+def _current_gmail_service() -> Resource:
+    if os.getenv("VERCEL") == "1":
+        user_id = _CURRENT_GMAIL_USER_ID.get()
+        if user_id is None:
+            raise GmailAuthenticationError("Gmail authentication is unavailable.")
+        get_gmail_service.cache_clear()
+        return get_gmail_service(user_id)
+    return get_gmail_service()
+
+
+@lru_cache(maxsize=64)
+def get_gmail_service(user_id: int | None = None) -> Resource:
+    """Create a user-scoped Vercel service or the local token.json service."""
+    if os.getenv("VERCEL") == "1":
+        if user_id is None:
+            raise GmailAuthenticationError("Gmail authentication is unavailable.")
+        import auth_store
+        from gmail_oauth import decrypt_credentials, encrypt_credentials
+
+        encrypted_credentials = auth_store.get_gmail_credentials(user_id)
+        if not encrypted_credentials:
+            raise GmailAuthenticationError("Gmail authentication is unavailable. Reauthorize the Gmail account.")
+        try:
+            credential_json = decrypt_credentials(encrypted_credentials)
+            credentials = Credentials.from_authorized_user_info(
+                json.loads(credential_json), SCOPES
+            )
+            if not credentials.has_scopes(SCOPES):
+                raise GmailAuthenticationError(_gmail_auth_error_message("invalid_scope"))
+            if credentials.expired and credentials.refresh_token:
+                credentials.refresh(Request())
+                auth_store.store_gmail_credentials(
+                    user_id,
+                    encrypt_credentials(credentials.to_json()),
+                )
+            if not credentials.valid or not credentials.has_scopes(SCOPES):
+                raise GmailAuthenticationError(_gmail_auth_error_message("invalid_scope"))
+            return build("gmail", "v1", credentials=credentials)
+        except GmailAuthenticationError:
+            raise
+        except (GoogleAuthError, OSError, ValueError, TypeError):
+            raise GmailAuthenticationError(_gmail_auth_error_message("invalid_scope")) from None
+
     if not TOKEN_FILE.is_file():
         raise GmailAuthenticationError("Gmail authentication is unavailable. Reauthorize the Gmail account.")
 
@@ -254,7 +305,7 @@ def _message_body(payload: object) -> str:
 
 def _list_emails(query: str | None, max_results: int) -> list[EmailMetadata]:
     """List messages and fetch only their useful metadata headers."""
-    service = get_gmail_service()
+    service = _current_gmail_service()
     request = service.users().messages().list(
         userId="me",
         maxResults=_bounded_max_results(max_results),
@@ -304,7 +355,7 @@ def get_email(message_id: str) -> EmailMessage | dict[str, str]:
         return {"error": "Gmail message not found."}
 
     try:
-        service = get_gmail_service()
+        service = _current_gmail_service()
         message = service.users().messages().get(
             userId="me", id=message_id, format="full"
         ).execute()
@@ -341,7 +392,7 @@ def send_email(to: str, subject: str, body: str) -> dict[str, str]:
         return {"error": "A non-empty email body within the size limit is required."}
 
     try:
-        service = get_gmail_service()
+        service = _current_gmail_service()
         profile = service.users().getProfile(userId="me").execute()
         sender = str(profile.get("emailAddress", ""))
         if not sender:
@@ -404,7 +455,7 @@ def get_unread_emails(max_results: int = 10) -> list[EmailMetadata] | list[dict[
 def get_email_labels() -> list[GmailLabel] | dict[str, str]:
     """List the user's Gmail labels when the request is about labels or folders."""
     try:
-        response = get_gmail_service().users().labels().list(userId="me").execute()
+        response = _current_gmail_service().users().labels().list(userId="me").execute()
         labels = response.get("labels", [])
         return [
             {
@@ -432,7 +483,7 @@ def count_emails(query: str = "") -> int | dict[str, str]:
     query = query.strip()
 
     try:
-        service = get_gmail_service()
+        service = _current_gmail_service()
         total = 0
         page_token: str | None = None
         while True:
@@ -519,7 +570,7 @@ def get_email_summary_data(
 def gmail_account_information() -> str:
     """Expose basic account information without returning credentials or message data."""
     try:
-        profile = get_gmail_service().users().getProfile(userId="me").execute()
+        profile = _current_gmail_service().users().getProfile(userId="me").execute()
         return json.dumps(
             {
                 "account_email": str(profile.get("emailAddress", "")),

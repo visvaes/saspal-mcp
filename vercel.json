@@ -1,0 +1,9 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "web_app.py": {
+      "includeFiles": "frontend/**",
+      "excludeFiles": "{.env,.env.*,credentials.json,**/credentials.json,token.json,**/token.json,token.json.bak,**/token.json.bak,auth.sqlite3,*.sqlite,*.sqlite3,saspal.db,*.db,.venv/**,venv/**,tests/**}"
+    }
+  }
+}

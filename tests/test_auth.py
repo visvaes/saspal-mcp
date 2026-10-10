@@ -1,4 +1,5 @@
 import sqlite3
+import os
 import tempfile
 import unittest
 from unittest.mock import MagicMock
@@ -10,6 +11,8 @@ from fastapi.testclient import TestClient
 
 import auth_mailer
 import auth_store
+import gmail_mcp_server
+import gmail_oauth
 import web_app
 
 
@@ -58,6 +61,185 @@ class AuthenticationTests(unittest.TestCase):
                 "password_confirmation": password,
             },
             headers=self.csrf_headers(),
+        )
+
+    def test_oauth_state_and_credentials_use_persistent_user_records(self):
+        response = self.signup()
+        user_id = response.json()["user"]["id"]
+
+        state = auth_store.create_oauth_state(user_id)
+        self.assertEqual(auth_store.consume_oauth_state(state), user_id)
+        self.assertIsNone(auth_store.consume_oauth_state(state))
+
+        auth_store.store_gmail_credentials(user_id, "encrypted-credential-payload")
+        self.assertEqual(
+            auth_store.get_gmail_credentials(user_id),
+            "encrypted-credential-payload",
+        )
+        auth_store.delete_gmail_credentials(user_id)
+        self.assertIsNone(auth_store.get_gmail_credentials(user_id))
+
+    def test_vercel_requires_postgres_without_creating_local_auth_database(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "not-created" / "auth.sqlite3"
+            with patch.object(auth_store, "AUTH_DATABASE_PATH", path):
+                with patch.dict(os.environ, {"VERCEL": "1"}, clear=True):
+                    with self.assertRaisesRegex(RuntimeError, "DATABASE_URL"):
+                        auth_store.initialize_auth_database()
+            self.assertFalse(path.parent.exists())
+
+    def test_postgres_account_insert_uses_returning_identity_and_bound_parameters(self):
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        cursor = MagicMock()
+        cursor.fetchone.return_value = {"id": 42}
+        connection.execute.return_value = cursor
+        with (
+            patch.dict(os.environ, {"DATABASE_URL": "postgresql://example.invalid/test"}),
+            patch("psycopg.connect", return_value=connection),
+        ):
+            user = auth_store.create_user("Test User", "TEST@example.net", "argon-hash")
+
+        self.assertEqual(user["id"], 42)
+        query, parameters = connection.execute.call_args.args
+        self.assertIn("RETURNING id", query)
+        self.assertIn("%s", query)
+        self.assertEqual(parameters[1], "test@example.net")
+        self.assertNotIn("TEST@example.net", query)
+
+    def test_vercel_gmail_connect_returns_google_web_oauth_url(self):
+        self.assertEqual(self.signup().status_code, 200)
+        session = auth_store.get_session(self.client.cookies.get(web_app.SESSION_COOKIE))
+        authorization_url = "https://accounts.google.com/o/oauth2/auth?state=test-state"
+        with (
+            patch.dict(os.environ, {"VERCEL": "1"}),
+            patch.object(web_app, "_current_session", return_value=session),
+            patch.object(auth_store, "create_oauth_state", return_value="test-state"),
+            patch("gmail_oauth.authorization_url", return_value=authorization_url),
+        ):
+            response = self.client.post(
+                "/api/gmail/connect",
+                headers=self.csrf_headers(),
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"authorization_url": authorization_url})
+
+    def test_gmail_oauth_callback_stores_encrypted_credentials_and_redirects(self):
+        self.assertEqual(self.signup().status_code, 200)
+        user_id = auth_store.get_session(
+            self.client.cookies.get(web_app.SESSION_COOKIE)
+        )["id"]
+        with (
+            patch.object(auth_store, "consume_oauth_state", return_value=user_id),
+            patch.object(auth_store, "store_gmail_credentials") as store_credentials,
+            patch("gmail_oauth.exchange_code", return_value="encrypted-credential-data"),
+        ):
+            response = self.client.get(
+                "/api/gmail/oauth/callback?state=single-use-state&code=oauth-code",
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/")
+        store_credentials.assert_called_once_with(user_id, "encrypted-credential-data")
+        self.assertNotIn("oauth-code", response.text)
+
+    def test_gmail_credentials_are_encrypted_with_configured_fernet_key(self):
+        from cryptography.fernet import Fernet
+
+        credentials_json = '{"refresh_token":"never-return-this"}'
+        key = Fernet.generate_key().decode("ascii")
+        with patch.dict(os.environ, {"GMAIL_TOKEN_ENCRYPTION_KEY": key}):
+            ciphertext = gmail_oauth.encrypt_credentials(credentials_json)
+            self.assertEqual(gmail_oauth.decrypt_credentials(ciphertext), credentials_json)
+        self.assertNotIn("never-return-this", ciphertext)
+
+    def test_vercel_password_reset_uses_https_provider(self):
+        environment = {
+            "VERCEL": "1",
+            "RESEND_API_KEY": "test-resend-key",
+            "RESEND_FROM_EMAIL": "SASPAL <no-reply@example.test>",
+            "APP_BASE_URL": "https://saspal-mcp.vercel.app",
+        }
+        response = MagicMock()
+        with (
+            patch.dict(os.environ, environment),
+            patch("auth_mailer.httpx.post", return_value=response) as send_request,
+        ):
+            auth_mailer.send_password_reset_email("user@example.test", "reset-token")
+
+        self.assertEqual(send_request.call_args.args[0], "https://api.resend.com/emails")
+        self.assertEqual(
+            send_request.call_args.kwargs["headers"]["Authorization"],
+            "Bearer test-resend-key",
+        )
+        response.raise_for_status.assert_called_once()
+
+    def test_pending_email_draft_is_owner_scoped_and_single_use(self):
+        response = self.signup()
+        user_id = response.json()["user"]["id"]
+        draft_id = "reviewable-draft-token"
+        auth_store.store_pending_email_draft(
+            user_id,
+            draft_id,
+            "recipient@example.test",
+            "Project update",
+            "The meeting is Monday.",
+        )
+
+        self.assertIsNone(auth_store.consume_pending_email_draft(user_id + 1, draft_id))
+        self.assertEqual(
+            auth_store.consume_pending_email_draft(user_id, draft_id),
+            {
+                "to": "recipient@example.test",
+                "subject": "Project update",
+                "body": "The meeting is Monday.",
+            },
+        )
+        self.assertIsNone(auth_store.consume_pending_email_draft(user_id, draft_id))
+
+    def test_vercel_pending_draft_is_encrypted_and_decrypted_on_consumption(self):
+        from cryptography.fernet import Fernet
+
+        key = Fernet.generate_key().decode("ascii")
+        connection = MagicMock()
+        returned_draft = MagicMock()
+        context = MagicMock()
+        context.__enter__.return_value = auth_store._ConnectionAdapter(
+            connection,
+            postgres=False,
+        )
+        connection.execute.side_effect = [MagicMock(), MagicMock(), returned_draft]
+        with patch.dict(
+            os.environ,
+            {"VERCEL": "1", "GMAIL_TOKEN_ENCRYPTION_KEY": key},
+        ), patch("auth_store._connection", return_value=context):
+            auth_store.store_pending_email_draft(
+                5,
+                "draft-id",
+                "private-recipient@example.test",
+                "Private subject",
+                "Private body",
+            )
+            insert_parameters = connection.execute.call_args_list[1].args[1]
+            encrypted_draft = insert_parameters[5]
+            returned_draft.fetchone.return_value = {
+                "recipient": "",
+                "subject": "",
+                "body": "",
+                "draft_ciphertext": encrypted_draft,
+            }
+            draft = auth_store.consume_pending_email_draft(5, "draft-id")
+
+        self.assertEqual(insert_parameters[2:5], ("", "", ""))
+        self.assertNotIn("Private body", encrypted_draft)
+        self.assertEqual(
+            draft,
+            {
+                "to": "private-recipient@example.test",
+                "subject": "Private subject",
+                "body": "Private body",
+            },
         )
 
     def test_login_redirect_and_gmail_apis_require_authentication(self):

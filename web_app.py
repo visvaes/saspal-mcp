@@ -5,10 +5,9 @@ import json
 import logging
 import os
 import secrets
-import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal
+from typing import AsyncIterator, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -29,7 +28,9 @@ FRONTEND_DIR = PROJECT_ROOT / "frontend"
 logger = logging.getLogger(__name__)
 SESSION_COOKIE = "saspal_session"
 CSRF_COOKIE = "saspal_csrf"
-SESSION_COOKIE_SECURE = os.getenv("SESSION_COOKIE_SECURE", "false").casefold() == "true"
+SESSION_COOKIE_SECURE = os.getenv("VERCEL") == "1" or os.getenv(
+    "SESSION_COOKIE_SECURE", "false"
+).casefold() == "true"
 TRUSTED_ORIGINS = {
     "http://localhost:8000",
     "http://127.0.0.1:8000",
@@ -165,18 +166,33 @@ def _origin_is_allowed(request: Request, origin: str) -> bool:
     return bool(host and origin == f"{request.url.scheme}://{host}")
 
 
-def require_authenticated_user(request: Request) -> dict[str, object]:
+async def require_authenticated_user(request: Request) -> AsyncIterator[dict[str, object]]:
     session = _current_session(request)
     if session is None:
         raise HTTPException(status_code=401, detail="Authentication required.")
-    return session
+    token = None
+    if os.getenv("VERCEL") == "1":
+        import gmail_mcp_server
+
+        token = gmail_mcp_server.set_current_gmail_user_id(int(session["id"]))
+    try:
+        yield session
+    finally:
+        if token is not None:
+            gmail_mcp_server.reset_current_gmail_user_id(token)
 
 
-def gmail_is_connected() -> bool:
+def gmail_is_connected(user_id: int | None = None) -> bool:
     try:
         import gmail_mcp_server
 
-        gmail_mcp_server.get_gmail_service()
+        if os.getenv("VERCEL") == "1":
+            if user_id is None:
+                return False
+            gmail_mcp_server.get_gmail_service.cache_clear()
+            gmail_mcp_server.get_gmail_service(user_id)
+        else:
+            gmail_mcp_server.get_gmail_service()
         return True
     except Exception:
         return False
@@ -314,18 +330,51 @@ async def connect_gmail_page(request: Request) -> Response:
 
 @app.get("/api/gmail-status")
 async def gmail_status(user: dict[str, object] = Depends(require_authenticated_user)) -> dict[str, bool]:
-    return {"connected": gmail_is_connected()}
+    return {"connected": gmail_is_connected(int(user["id"]))}
 
 
 @app.post("/api/gmail/connect")
 async def gmail_connect(
     request: Request,
     user: dict[str, object] = Depends(require_authenticated_user),
-) -> dict[str, bool]:
+) -> dict[str, bool | str]:
+    if os.getenv("VERCEL") == "1":
+        try:
+            import gmail_oauth
+
+            state = auth_store.create_oauth_state(int(user["id"]))
+            return {"authorization_url": gmail_oauth.authorization_url(state)}
+        except RuntimeError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from None
     try:
         return {"connected": connect_gmail()}
     except RuntimeError as error:
         raise HTTPException(status_code=502, detail=str(error)) from None
+
+
+@app.get("/api/gmail/oauth/callback", include_in_schema=False)
+async def gmail_oauth_callback(request: Request, state: str = "", code: str = "", error: str = "") -> Response:
+    user = _current_session(request)
+    if user is None:
+        return RedirectResponse("/login?next=/connect-gmail", status_code=303)
+    if error or not state or not code:
+        return RedirectResponse("/connect-gmail?error=oauth", status_code=303)
+
+    user_id = auth_store.consume_oauth_state(state)
+    if user_id is None or user_id != int(user["id"]):
+        return RedirectResponse("/connect-gmail?error=oauth", status_code=303)
+
+    try:
+        import gmail_mcp_server
+        import gmail_oauth
+
+        encrypted_credentials = gmail_oauth.exchange_code(code, state)
+        auth_store.store_gmail_credentials(user_id, encrypted_credentials)
+        gmail_mcp_server.get_gmail_service.cache_clear()
+    except Exception:
+        logger.warning("Gmail OAuth callback failed.")
+        return RedirectResponse("/connect-gmail?error=oauth", status_code=303)
+    return RedirectResponse("/", status_code=303)
 
 
 @app.post("/auth/signup")
@@ -333,7 +382,9 @@ async def sign_up(request: SignUpRequest, response: Response) -> dict[str, objec
     password_hash = password_hasher.hash(request.password)
     try:
         user = auth_store.create_user(request.full_name, str(request.email), password_hash)
-    except sqlite3.IntegrityError:
+    except Exception as error:
+        if not auth_store.is_duplicate_email_error(error):
+            raise
         raise HTTPException(status_code=409, detail="An account with that email already exists.") from None
 
     session_token, csrf_token = auth_store.create_session(int(user["id"]))
@@ -501,7 +552,7 @@ async def chat_stream(
 async def recent_emails(
     user: dict[str, object] = Depends(require_authenticated_user),
 ) -> list[dict[str, object]]:
-    if not gmail_is_connected():
+    if not gmail_is_connected(int(user["id"])):
         raise HTTPException(status_code=403, detail="Connect Gmail to use email features.")
     try:
         return await app.state.chat_host.get_recent_emails(max_results=10)
@@ -516,7 +567,7 @@ async def recent_emails(
 async def unread_count(
     user: dict[str, object] = Depends(require_authenticated_user),
 ) -> dict[str, int]:
-    if not gmail_is_connected():
+    if not gmail_is_connected(int(user["id"])):
         raise HTTPException(status_code=403, detail="Connect Gmail to use email features.")
     try:
         return {"count": await app.state.chat_host.get_unread_count()}
@@ -532,7 +583,7 @@ async def search_emails(
     request: SearchRequest,
     user: dict[str, object] = Depends(require_authenticated_user),
 ) -> list[dict[str, object]]:
-    if not gmail_is_connected():
+    if not gmail_is_connected(int(user["id"])):
         raise HTTPException(status_code=403, detail="Connect Gmail to use email features.")
     try:
         return await app.state.chat_host.search_emails(request.query, request.max_results)
@@ -548,7 +599,7 @@ async def date_search(
     request: DateSearchRequest,
     user: dict[str, object] = Depends(require_authenticated_user),
 ) -> list[dict[str, object]]:
-    if not gmail_is_connected():
+    if not gmail_is_connected(int(user["id"])):
         raise HTTPException(status_code=403, detail="Connect Gmail to use email features.")
     try:
         return await app.state.chat_host.search_by_date(
@@ -575,6 +626,7 @@ async def create_email_draft(
             request.instructions,
             subject=request.subject,
             body=request.body,
+            user_id=int(user["id"]),
         )
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from None
@@ -587,10 +639,13 @@ async def confirm_email_draft(
     request: EmailDraftActionRequest,
     user: dict[str, object] = Depends(require_authenticated_user),
 ) -> dict[str, str]:
-    if not gmail_is_connected():
+    if not gmail_is_connected(int(user["id"])):
         raise HTTPException(status_code=403, detail="Connect Gmail to send email.")
     try:
-        return await app.state.chat_host.confirm_email_draft(request.draft_id)
+        return await app.state.chat_host.confirm_email_draft(
+            request.draft_id,
+            user_id=int(user["id"]),
+        )
     except LookupError as error:
         raise HTTPException(status_code=409, detail=str(error)) from None
     except RuntimeError as error:
@@ -602,7 +657,10 @@ async def cancel_email_draft(
     request: EmailDraftActionRequest,
     user: dict[str, object] = Depends(require_authenticated_user),
 ) -> dict[str, bool]:
-    cancelled = await app.state.chat_host.cancel_email_draft(request.draft_id)
+    cancelled = await app.state.chat_host.cancel_email_draft(
+        request.draft_id,
+        user_id=int(user["id"]),
+    )
     return {"cancelled": cancelled}
 
 
@@ -611,7 +669,7 @@ async def open_email(
     message_id: str,
     user: dict[str, object] = Depends(require_authenticated_user),
 ) -> dict[str, object]:
-    if not gmail_is_connected():
+    if not gmail_is_connected(int(user["id"])):
         raise HTTPException(status_code=403, detail="Connect Gmail to use email features.")
     if not message_id.strip():
         raise HTTPException(status_code=400, detail="Email message ID is required.")
