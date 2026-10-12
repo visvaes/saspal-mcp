@@ -279,7 +279,32 @@ async def enforce_csrf(request: Request, call_next):
 @app.exception_handler(RequestValidationError)
 async def sanitize_auth_validation_errors(request: Request, error: RequestValidationError):
     if request.url.path.startswith("/auth/"):
-        return JSONResponse(status_code=422, content={"detail": "Invalid authentication request."})
+        detail = "Invalid authentication request."
+        if request.url.path == "/auth/signup":
+            validation_errors = error.errors()
+            if any(
+                item.get("loc", ())[-1:] == ("password",)
+                and item.get("type") == "string_too_short"
+                for item in validation_errors
+            ):
+                detail = "Password must be at least 12 characters."
+            elif any(
+                item.get("loc", ())[-1:] == ("password_confirmation",)
+                and item.get("type") == "string_too_short"
+                for item in validation_errors
+            ):
+                detail = "Confirm password must be at least 12 characters."
+            elif any(
+                item.get("loc", ())[-1:] == ("email",)
+                for item in validation_errors
+            ):
+                detail = "Enter a valid email address."
+            elif any(
+                item.get("loc", ())[-1:] == ("full_name",)
+                for item in validation_errors
+            ):
+                detail = "Enter your full name."
+        return JSONResponse(status_code=422, content={"detail": detail})
     return await request_validation_exception_handler(request, error)
 
 

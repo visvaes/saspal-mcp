@@ -484,6 +484,34 @@ class AuthenticationTests(unittest.TestCase):
         self.assertNotIn(secret, response.text)
         self.assertEqual(response.json(), {"detail": "Invalid authentication request."})
 
+    def test_signup_reports_short_password_without_echoing_credentials(self):
+        self.client.get("/signup")
+        password = "short-pass"
+        response = self.client.post(
+            "/auth/signup",
+            json={
+                "full_name": "Test Member",
+                "email": "member@example.net",
+                "password": password,
+                "password_confirmation": password,
+            },
+            headers=self.csrf_headers(),
+        )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertNotIn(password, response.text)
+        self.assertEqual(
+            response.json(),
+            {"detail": "Password must be at least 12 characters."},
+        )
+
+    def test_signup_form_enables_browser_validation(self):
+        response = self.client.get("/signup")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("novalidate", response.text)
+        self.assertIn('minlength="12"', response.text)
+
     def test_gmail_connection_requires_an_explicit_connect_step(self):
         self.assertEqual(self.signup().status_code, 200)
 
