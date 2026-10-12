@@ -70,7 +70,18 @@ test("routes natural draft requests to review instead of general chat", async ()
 test("shorthand send request becomes a draft request", () => {
   const request = parseEmailSendRequest("send a hi msg to recipient@example.test");
   assert.equal(request.to, "recipient@example.test");
-  assert.match(request.instructions, /hi/i);
+  assert.equal(request.body, "hi");
+  assert.match(request.instructions, /exact provided message/i);
+});
+
+test("short message command excludes the command and recipient from the email body", () => {
+  const request = parseEmailSendRequest(
+    "send a hi message to this mail visvaes1026@gmail.com"
+  );
+
+  assert.equal(request.to, "visvaes1026@gmail.com");
+  assert.equal(request.body, "hi");
+  assert.doesNotMatch(request.body, /send|mail|visvaes1026/i);
 });
 
 test("extracts a pasted email and turns it into a reply draft", () => {

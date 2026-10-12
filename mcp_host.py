@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import re
 import secrets
@@ -16,6 +17,7 @@ from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 
+logger = logging.getLogger(__name__)
 PROJECT_ROOT = Path(__file__).resolve().parent
 SERVER_FILE = PROJECT_ROOT / "gmail_mcp_server.py"
 SASPAL_SERVER_FILE = PROJECT_ROOT / "saspal_mcp_server.py"
@@ -854,7 +856,15 @@ class MCPChatHost:
                 draft_content = json.loads(content)
                 subject = subject if subject is not None else draft_content.get("subject")
                 body = body if body is not None else draft_content.get("body")
-            except Exception:
+            except Exception as error:
+                status_code = getattr(error, "status_code", None)
+                if not isinstance(status_code, int):
+                    status_code = None
+                logger.error(
+                    "Email draft generation failed (%s, HTTP %s).",
+                    type(error).__name__,
+                    status_code if status_code is not None else "unknown",
+                )
                 raise RuntimeError("Could not prepare an email draft.") from None
 
         if (

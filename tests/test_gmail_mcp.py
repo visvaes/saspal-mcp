@@ -231,6 +231,39 @@ class GmailMCPTests(unittest.TestCase):
             else:
                 os.environ["OPENROUTER_API_KEY"] = original_key
 
+    def test_mcp_host_draft_failure_logs_only_safe_error_metadata(self):
+        host = mcp_host.MCPChatHost()
+        client = MagicMock()
+        client.chat.completions.create.side_effect = RuntimeError(
+            "private recipient and prompt details"
+        )
+
+        with (
+            patch.object(host, "_openrouter_client", return_value=client),
+            patch.object(mcp_host.logger, "error") as log_error,
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Could not prepare an email draft.",
+            ):
+                asyncio.run(
+                    host.prepare_email_draft(
+                        "person@example.com",
+                        "private email body",
+                    )
+                )
+
+        log_error.assert_called_once_with(
+            "Email draft generation failed (%s, HTTP %s).",
+            "RuntimeError",
+            "unknown",
+        )
+        self.assertNotIn(
+            "private recipient and prompt details",
+            str(log_error.call_args),
+        )
+        self.assertNotIn("private email body", str(log_error.call_args))
+
     def test_mcp_host_confirm_send_duplicate_repeated_protection(self):
         original_key = os.environ.get("OPENROUTER_API_KEY")
         os.environ["OPENROUTER_API_KEY"] = "test-key"

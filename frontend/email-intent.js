@@ -181,12 +181,17 @@
       }
     });
 
-    const shortMessage = normalizedMessage.match(/^send\s+(?:a|an)\s+(.+?)\s+msg\b/i);
+    const shortMessage = normalizedMessage.match(
+      /^send\s+(?:a|an)\s+(.+?)\s+(?:message|msg)\b/i
+    );
     const instructions = subject && body
       ? null
       : shortMessage
-        ? `Write a brief email saying: ${shortMessage[1].trim()}`
+        ? "Create a short email and preserve the exact provided message as its body."
         : normalizedMessage.trim();
+    if (shortMessage && !body) {
+      body = shortMessage[1].trim();
+    }
     return { to, subject, body, instructions };
   }
 
