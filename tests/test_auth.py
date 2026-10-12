@@ -144,6 +144,27 @@ class AuthenticationTests(unittest.TestCase):
         store_credentials.assert_called_once_with(user_id, "encrypted-credential-data")
         self.assertNotIn("oauth-code", response.text)
 
+    def test_gmail_oauth_callback_logs_exception_and_redirects_generically(self):
+        self.assertEqual(self.signup().status_code, 200)
+        user_id = auth_store.get_session(
+            self.client.cookies.get(web_app.SESSION_COOKIE)
+        )["id"]
+        with (
+            patch.object(auth_store, "consume_oauth_state", return_value=user_id),
+            patch("gmail_oauth.exchange_code", side_effect=RuntimeError("token exchange failed")),
+            patch.object(web_app.logger, "exception") as log_exception,
+        ):
+            response = self.client.get(
+                "/api/gmail/oauth/callback?state=single-use-state&code=oauth-code",
+                follow_redirects=False,
+            )
+
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/connect-gmail?error=oauth")
+        self.assertNotIn("token exchange failed", response.text)
+        self.assertNotIn("oauth-code", response.text)
+        log_exception.assert_called_once_with("Gmail OAuth callback failed.")
+
     def test_gmail_credentials_are_encrypted_with_configured_fernet_key(self):
         from cryptography.fernet import Fernet
 

@@ -372,7 +372,7 @@ async def gmail_oauth_callback(request: Request, state: str = "", code: str = ""
         auth_store.store_gmail_credentials(user_id, encrypted_credentials)
         gmail_mcp_server.get_gmail_service.cache_clear()
     except Exception:
-        logger.warning("Gmail OAuth callback failed.")
+        logger.exception("Gmail OAuth callback failed.")
         return RedirectResponse("/connect-gmail?error=oauth", status_code=303)
     return RedirectResponse("/", status_code=303)
 
