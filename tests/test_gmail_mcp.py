@@ -264,6 +264,37 @@ class GmailMCPTests(unittest.TestCase):
         )
         self.assertNotIn("private email body", str(log_error.call_args))
 
+    def test_missing_openrouter_key_has_safe_actionable_configuration_error(self):
+        host = mcp_host.MCPChatHost()
+        host.client = None
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": ""}):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "OpenRouter is not configured for this deployment",
+            ) as raised:
+                host._openrouter_client()
+
+        self.assertEqual(
+            str(raised.exception),
+            mcp_host.OPENROUTER_CONFIGURATION_ERROR,
+        )
+        self.assertNotIn("test-key", str(raised.exception))
+
+    def test_draft_request_surfaces_safe_missing_openrouter_configuration(self):
+        host = mcp_host.MCPChatHost()
+        host.client = None
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": ""}):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "OpenRouter is not configured for this deployment",
+            ):
+                asyncio.run(
+                    host.prepare_email_draft(
+                        "person@example.com",
+                        "Write a brief email saying hi",
+                    )
+                )
+
     def test_mcp_host_confirm_send_duplicate_repeated_protection(self):
         original_key = os.environ.get("OPENROUTER_API_KEY")
         os.environ["OPENROUTER_API_KEY"] = "test-key"
@@ -286,7 +317,7 @@ class GmailMCPTests(unittest.TestCase):
             else:
                 os.environ["OPENROUTER_API_KEY"] = original_key
 
-    def test_fastapi_chat_endpoint_uses_mocked_chat_host(self):
+    def test_fastapi_chat_endpoints_explain_missing_openrouter_configuration(self):
         class FakeHost:
             async def start(self):
                 return None
@@ -324,8 +355,31 @@ class GmailMCPTests(unittest.TestCase):
                         json={"message": "hi there", "history": []},
                         headers={"X-CSRF-Token": client.cookies.get(web_app.CSRF_COOKIE)},
                     )
-            self.assertEqual(response.status_code, 200)
-            self.assertIn("echo: hi there", response.json()["response"])
+                    self.assertEqual(response.status_code, 200)
+                    self.assertIn("echo: hi there", response.json()["response"])
+
+                    with patch.object(
+                        app.state.chat_host,
+                        "respond",
+                        new=AsyncMock(
+                            side_effect=RuntimeError(
+                                mcp_host.OPENROUTER_CONFIGURATION_ERROR
+                            )
+                        ),
+                    ):
+                        stream_response = client.post(
+                            "/chat/stream",
+                            json={"message": "show me today's emails", "history": []},
+                            headers={
+                                "X-CSRF-Token": client.cookies.get(web_app.CSRF_COOKIE)
+                            },
+                        )
+                    self.assertEqual(stream_response.status_code, 200)
+                    self.assertIn(
+                        "AI chat and email drafting are unavailable",
+                        stream_response.text,
+                    )
+                    self.assertNotIn("secret", stream_response.text.lower())
         finally:
             web_app.MCPChatHost = original
 

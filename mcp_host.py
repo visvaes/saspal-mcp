@@ -29,6 +29,10 @@ MAX_HISTORY_TURNS = 24
 MAX_HISTORY_CHARS = 12_000
 MAX_SUMMARY_EMAILS = 50
 EMAIL_DRAFT_TTL_SECONDS = 600
+OPENROUTER_CONFIGURATION_ERROR = (
+    "OpenRouter is not configured for this deployment. "
+    "The app administrator must add OPENROUTER_API_KEY in Vercel."
+)
 _EMAIL_ADDRESS = re.compile(
     r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@"
     r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
@@ -696,7 +700,7 @@ class MCPChatHost:
         if self.client is None:
             api_key = os.getenv("OPENROUTER_API_KEY")
             if not api_key:
-                raise RuntimeError("OPENROUTER_API_KEY is not configured for this deployment.")
+                raise RuntimeError(OPENROUTER_CONFIGURATION_ERROR)
             self.client = OpenAI(api_key=api_key, base_url=OPENROUTER_BASE_URL)
         return self.client
 
@@ -832,8 +836,8 @@ class MCPChatHost:
                 },
                 ensure_ascii=False,
             )
+            client = self._openrouter_client()
             try:
-                client = self._openrouter_client()
                 response = await asyncio.to_thread(
                     client.chat.completions.create,
                     model=os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL),

@@ -20,7 +20,7 @@ from pwdlib import PasswordHash
 
 import auth_mailer
 import auth_store
-from mcp_host import MCPChatHost
+from mcp_host import MCPChatHost, OPENROUTER_CONFIGURATION_ERROR
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -543,6 +543,20 @@ async def chat_stream(
 
             try:
                 response = task.result()
+            except RuntimeError as error:
+                if str(error) == OPENROUTER_CONFIGURATION_ERROR:
+                    logger.error("Chat request unavailable: OpenRouter API key is not configured.")
+                    yield (
+                        'event: error\ndata: {"message":"AI chat and email drafting are unavailable '
+                        'because the OpenRouter key is not configured for this deployment."}\n\n'
+                    )
+                    return
+                logger.warning("Chat request failed (%s).", type(error).__name__)
+                yield (
+                    'event: error\ndata: {"message":"I could not complete that request. '
+                    'Please try again."}\n\n'
+                )
+                return
             except Exception as error:
                 logger.warning("Chat request failed (%s).", type(error).__name__)
                 yield (
