@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import sqlite3
 import os
 import tempfile
@@ -67,9 +69,12 @@ class AuthenticationTests(unittest.TestCase):
         response = self.signup()
         user_id = response.json()["user"]["id"]
 
-        state = auth_store.create_oauth_state(user_id)
-        self.assertEqual(auth_store.consume_oauth_state(state), user_id)
-        self.assertIsNone(auth_store.consume_oauth_state(state))
+        state, code_verifier = auth_store.create_oauth_state(user_id)
+        self.assertEqual(
+            auth_store.consume_oauth_state(state, user_id),
+            code_verifier,
+        )
+        self.assertIsNone(auth_store.consume_oauth_state(state, user_id))
 
         auth_store.store_gmail_credentials(user_id, "encrypted-credential-payload")
         self.assertEqual(
@@ -78,6 +83,40 @@ class AuthenticationTests(unittest.TestCase):
         )
         auth_store.delete_gmail_credentials(user_id)
         self.assertIsNone(auth_store.get_gmail_credentials(user_id))
+
+    def test_existing_oauth_state_table_is_migrated_for_pkce_verifier(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database_path = Path(directory) / "auth.sqlite3"
+            connection = sqlite3.connect(database_path)
+            try:
+                connection.execute(
+                    "CREATE TABLE users (id INTEGER PRIMARY KEY, full_name TEXT NOT NULL, "
+                    "email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, "
+                    "is_active INTEGER NOT NULL DEFAULT 1, created_at REAL NOT NULL)"
+                )
+                connection.execute(
+                    "CREATE TABLE oauth_states (state_hash TEXT PRIMARY KEY, "
+                    "user_id BIGINT NOT NULL REFERENCES users(id), "
+                    "created_at REAL NOT NULL, expires_at REAL NOT NULL)"
+                )
+                connection.commit()
+            finally:
+                connection.close()
+
+            with (
+                patch.object(auth_store, "AUTH_DATABASE_PATH", database_path),
+                patch.dict(
+                    os.environ,
+                    {"DATABASE_URL": "", "VERCEL": "", "VERCEL_ENV": ""},
+                ),
+            ):
+                auth_store.initialize_auth_database()
+                with auth_store._connection() as connection:
+                    columns = connection.execute(
+                        "PRAGMA table_info(oauth_states)"
+                    ).fetchall()
+
+        self.assertIn("code_verifier", {column["name"] for column in columns})
 
     def test_vercel_requires_postgres_without_creating_local_auth_database(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -114,8 +153,15 @@ class AuthenticationTests(unittest.TestCase):
         with (
             patch.dict(os.environ, {"VERCEL": "1"}),
             patch.object(web_app, "_current_session", return_value=session),
-            patch.object(auth_store, "create_oauth_state", return_value="test-state"),
-            patch("gmail_oauth.authorization_url", return_value=authorization_url),
+            patch.object(
+                auth_store,
+                "create_oauth_state",
+                return_value=("test-state", "private-code-verifier"),
+            ),
+            patch(
+                "gmail_oauth.authorization_url",
+                return_value=authorization_url,
+            ) as build_authorization_url,
         ):
             response = self.client.post(
                 "/api/gmail/connect",
@@ -123,16 +169,26 @@ class AuthenticationTests(unittest.TestCase):
             )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"authorization_url": authorization_url})
+        self.assertNotIn("private-code-verifier", response.text)
+        build_authorization_url.assert_called_once_with(
+            "test-state",
+            "private-code-verifier",
+        )
 
     def test_gmail_oauth_callback_stores_encrypted_credentials_and_redirects(self):
         self.assertEqual(self.signup().status_code, 200)
         user_id = auth_store.get_session(
             self.client.cookies.get(web_app.SESSION_COOKIE)
         )["id"]
+        code_verifier = "private-code-verifier"
         with (
-            patch.object(auth_store, "consume_oauth_state", return_value=user_id),
+            patch.object(
+                auth_store,
+                "consume_oauth_state",
+                return_value=code_verifier,
+            ) as consume_state,
             patch.object(auth_store, "store_gmail_credentials") as store_credentials,
-            patch("gmail_oauth.exchange_code", return_value="encrypted-credential-data"),
+            patch("gmail_oauth.exchange_code", return_value="encrypted-credential-data") as exchange_code,
         ):
             response = self.client.get(
                 "/api/gmail/oauth/callback?state=single-use-state&code=oauth-code",
@@ -141,8 +197,14 @@ class AuthenticationTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 303)
         self.assertEqual(response.headers["location"], "/")
+        consume_state.assert_called_once_with(
+            "single-use-state",
+            user_id,
+        )
         store_credentials.assert_called_once_with(user_id, "encrypted-credential-data")
+        exchange_code.assert_called_once_with("oauth-code", "single-use-state", code_verifier)
         self.assertNotIn("oauth-code", response.text)
+        self.assertNotIn(code_verifier, response.text)
 
     def test_gmail_oauth_callback_logs_exception_and_redirects_generically(self):
         self.assertEqual(self.signup().status_code, 200)
@@ -150,7 +212,11 @@ class AuthenticationTests(unittest.TestCase):
             self.client.cookies.get(web_app.SESSION_COOKIE)
         )["id"]
         with (
-            patch.object(auth_store, "consume_oauth_state", return_value=user_id),
+            patch.object(
+                auth_store,
+                "consume_oauth_state",
+                return_value="private-code-verifier",
+            ),
             patch("gmail_oauth.exchange_code", side_effect=RuntimeError("token exchange failed")),
             patch.object(web_app.logger, "exception") as log_exception,
         ):
@@ -163,7 +229,103 @@ class AuthenticationTests(unittest.TestCase):
         self.assertEqual(response.headers["location"], "/connect-gmail?error=oauth")
         self.assertNotIn("token exchange failed", response.text)
         self.assertNotIn("oauth-code", response.text)
-        log_exception.assert_called_once_with("Gmail OAuth callback failed.")
+        self.assertNotIn("private-code-verifier", response.text)
+        log_exception.assert_called_once_with(
+            "Gmail OAuth authorization-code exchange failed."
+        )
+
+    def test_oauth_state_cannot_be_consumed_by_another_user(self):
+        response = self.signup()
+        user_id = response.json()["user"]["id"]
+        state, code_verifier = auth_store.create_oauth_state(user_id)
+
+        self.assertIsNone(auth_store.consume_oauth_state(state, user_id + 1))
+        self.assertEqual(
+            auth_store.consume_oauth_state(state, user_id),
+            code_verifier,
+        )
+        self.assertIsNone(auth_store.consume_oauth_state(state, user_id))
+
+    def test_oauth_state_expires_after_configured_ttl(self):
+        response = self.signup()
+        user_id = response.json()["user"]["id"]
+        now = 1_000_000
+        with patch(
+            "auth_store.time.time",
+            side_effect=(now, now + auth_store.OAUTH_STATE_TTL_SECONDS),
+        ):
+            state, _ = auth_store.create_oauth_state(user_id)
+            self.assertIsNone(auth_store.consume_oauth_state(state, user_id))
+
+    def test_gmail_oauth_uses_same_pkce_verifier_for_both_flow_steps(self):
+        client_config = (
+            '{"web":{"client_id":"test-client-id",'
+            '"client_secret":"test-client-secret",'
+            '"auth_uri":"https://accounts.google.test/auth",'
+            '"token_uri":"https://accounts.google.test/token"}}'
+        )
+        code_verifier = "a" * 128
+        expected_challenge = base64.urlsafe_b64encode(
+            hashlib.sha256(code_verifier.encode("ascii")).digest()
+        ).decode("ascii").rstrip("=")
+        flow = MagicMock()
+        flow.credentials.has_scopes.return_value = True
+        flow.credentials.to_json.return_value = "{}"
+        flow_builder_calls = []
+
+        def build_flow(*args, **kwargs):
+            flow_builder_calls.append((args, kwargs))
+            return flow
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "GOOGLE_OAUTH_CLIENT_JSON": client_config,
+                    "GOOGLE_OAUTH_REDIRECT_URI": (
+                        "https://saspal-mcp.vercel.app/api/gmail/oauth/callback"
+                    ),
+                },
+            )
+        ):
+            authorization_url = gmail_oauth.authorization_url(
+                "test-state",
+                code_verifier,
+            )
+            authorization_parameters = parse_qs(urlparse(authorization_url).query)
+            self.assertEqual(authorization_parameters["state"], ["test-state"])
+            self.assertEqual(
+                authorization_parameters["code_challenge"],
+                [expected_challenge],
+            )
+            self.assertEqual(
+                authorization_parameters["code_challenge_method"],
+                ["S256"],
+            )
+
+            with (
+                patch.object(
+                    gmail_oauth.Flow,
+                    "from_client_config",
+                    side_effect=build_flow,
+                ),
+                patch.object(
+                    gmail_oauth,
+                    "encrypt_credentials",
+                    return_value="encrypted",
+                ),
+            ):
+                result = gmail_oauth.exchange_code(
+                    "test-authorization-code",
+                    "test-state",
+                    code_verifier,
+                )
+
+        self.assertEqual(result, "encrypted")
+        self.assertEqual(len(flow_builder_calls), 1)
+        self.assertEqual(flow_builder_calls[0][1]["code_verifier"], code_verifier)
+        self.assertFalse(flow_builder_calls[0][1]["autogenerate_code_verifier"])
+        flow.fetch_token.assert_called_once_with(code="test-authorization-code")
 
     def test_gmail_credentials_are_encrypted_with_configured_fernet_key(self):
         from cryptography.fernet import Fernet

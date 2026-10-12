@@ -29,13 +29,15 @@ def _redirect_uri() -> str:
     return redirect_uri
 
 
-def authorization_url(state: str) -> str:
+def authorization_url(state: str, code_verifier: str) -> str:
     try:
         flow = Flow.from_client_config(
             _client_config(),
             scopes=SCOPES,
             state=state,
             redirect_uri=_redirect_uri(),
+            code_verifier=code_verifier,
+            autogenerate_code_verifier=False,
         )
         url, _ = flow.authorization_url(
             access_type="offline",
@@ -49,12 +51,14 @@ def authorization_url(state: str) -> str:
         raise RuntimeError("Could not start Gmail OAuth. Check the Web OAuth configuration.") from None
 
 
-def exchange_code(code: str, state: str) -> str:
+def exchange_code(code: str, state: str, code_verifier: str) -> str:
     flow = Flow.from_client_config(
         _client_config(),
         scopes=SCOPES,
         state=state,
         redirect_uri=_redirect_uri(),
+        code_verifier=code_verifier,
+        autogenerate_code_verifier=False,
     )
     flow.fetch_token(code=code)
     credentials = flow.credentials

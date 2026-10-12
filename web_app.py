@@ -342,8 +342,13 @@ async def gmail_connect(
         try:
             import gmail_oauth
 
-            state = auth_store.create_oauth_state(int(user["id"]))
-            return {"authorization_url": gmail_oauth.authorization_url(state)}
+            state, code_verifier = auth_store.create_oauth_state(int(user["id"]))
+            return {
+                "authorization_url": gmail_oauth.authorization_url(
+                    state,
+                    code_verifier,
+                )
+            }
         except RuntimeError as error:
             raise HTTPException(status_code=503, detail=str(error)) from None
     try:
@@ -356,23 +361,46 @@ async def gmail_connect(
 async def gmail_oauth_callback(request: Request, state: str = "", code: str = "", error: str = "") -> Response:
     user = _current_session(request)
     if user is None:
+        logger.warning("Gmail OAuth callback rejected: no authenticated session.")
         return RedirectResponse("/login?next=/connect-gmail", status_code=303)
     if error or not state or not code:
+        if error:
+            logger.warning("Gmail OAuth callback rejected: Google returned an OAuth error.")
+        else:
+            logger.warning("Gmail OAuth callback rejected: missing state or authorization code.")
         return RedirectResponse("/connect-gmail?error=oauth", status_code=303)
 
-    user_id = auth_store.consume_oauth_state(state)
-    if user_id is None or user_id != int(user["id"]):
+    try:
+        code_verifier = auth_store.consume_oauth_state(state, int(user["id"]))
+    except Exception:
+        logger.exception("Gmail OAuth callback failed while validating OAuth state.")
+        return RedirectResponse("/connect-gmail?error=oauth", status_code=303)
+    if code_verifier is None:
+        logger.warning(
+            "Gmail OAuth callback rejected: state is missing, expired, or not owned by the session."
+        )
         return RedirectResponse("/connect-gmail?error=oauth", status_code=303)
 
+    user_id = int(user["id"])
     try:
         import gmail_mcp_server
         import gmail_oauth
 
-        encrypted_credentials = gmail_oauth.exchange_code(code, state)
+        encrypted_credentials = gmail_oauth.exchange_code(code, state, code_verifier)
+    except Exception:
+        logger.exception("Gmail OAuth authorization-code exchange failed.")
+        return RedirectResponse("/connect-gmail?error=oauth", status_code=303)
+
+    try:
         auth_store.store_gmail_credentials(user_id, encrypted_credentials)
+    except Exception:
+        logger.exception("Gmail OAuth credential storage failed.")
+        return RedirectResponse("/connect-gmail?error=oauth", status_code=303)
+
+    try:
         gmail_mcp_server.get_gmail_service.cache_clear()
     except Exception:
-        logger.exception("Gmail OAuth callback failed.")
+        logger.exception("Gmail OAuth service-cache reset failed.")
         return RedirectResponse("/connect-gmail?error=oauth", status_code=303)
     return RedirectResponse("/", status_code=303)
 

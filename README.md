@@ -47,6 +47,7 @@ email records; it does not display prompts, tool arguments, or hidden reasoning.
 - Session cookies are HttpOnly and SameSite-protected. State-changing requests require CSRF validation. Vercel always marks cookies Secure; set `SESSION_COOKIE_SECURE=true` for other HTTPS deployments.
 - Password reset uses short-lived, single-use tokens stored as hashes and sent through separately configured SMTP. It does not use Gmail OAuth.
 - Local development retains the existing shared Gmail OAuth account in `token.json`. Vercel uses per-user Google Web OAuth credentials encrypted with `GMAIL_TOKEN_ENCRYPTION_KEY` and stored in managed PostgreSQL.
+- Vercel Gmail OAuth uses PKCE. Its verifier is stored server-side with the hashed, single-use OAuth state for up to ten minutes, then consumed during the authorization-code exchange; it is never returned to the browser.
 - The requested Gmail scopes are `gmail.readonly` and `gmail.send`; `gmail.modify` is not requested.
 - The LLM cannot access the `send_email` tool during normal chat. The application only calls it after the user explicitly confirms a pending draft.
 - Draft confirmation identifiers are short-lived and single-use. Local drafts remain in process memory; Vercel drafts are stored in PostgreSQL, scoped to their owner, and consumed once. Cancellation discards the draft without sending.

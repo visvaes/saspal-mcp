@@ -114,7 +114,8 @@ def initialize_auth_database() -> None:
             f"CREATE TABLE IF NOT EXISTS oauth_states ("
             f"state_hash TEXT PRIMARY KEY, "
             f"user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE, "
-            f"created_at {real_type} NOT NULL, expires_at {real_type} NOT NULL)",
+            f"created_at {real_type} NOT NULL, expires_at {real_type} NOT NULL, "
+            f"code_verifier TEXT)",
             f"CREATE TABLE IF NOT EXISTS gmail_credentials ("
             f"user_id BIGINT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE, "
             f"credential_ciphertext TEXT NOT NULL, updated_at {real_type} NOT NULL)",
@@ -130,6 +131,18 @@ def initialize_auth_database() -> None:
         )
         for statement in statements:
             connection.execute(statement)
+        if connection.is_postgres:
+            connection.execute(
+                "ALTER TABLE oauth_states ADD COLUMN IF NOT EXISTS code_verifier TEXT"
+            )
+        else:
+            oauth_state_columns = connection.execute(
+                "PRAGMA table_info(oauth_states)"
+            ).fetchall()
+            if not any(column["name"] == "code_verifier" for column in oauth_state_columns):
+                connection.execute(
+                    "ALTER TABLE oauth_states ADD COLUMN code_verifier TEXT"
+                )
         now = time.time()
         connection.execute("DELETE FROM auth_sessions WHERE expires_at <= ?", (now,))
         connection.execute(
@@ -274,27 +287,37 @@ def is_duplicate_email_error(error: Exception) -> bool:
     return isinstance(error, psycopg.errors.UniqueViolation)
 
 
-def create_oauth_state(user_id: int) -> str:
+def create_oauth_state(user_id: int) -> tuple[str, str]:
     state = secrets.token_urlsafe(32)
+    code_verifier = secrets.token_urlsafe(96)
     now = time.time()
     with _connection() as connection:
         connection.execute("DELETE FROM oauth_states WHERE expires_at <= ?", (now,))
         connection.execute(
-            "INSERT INTO oauth_states (state_hash, user_id, created_at, expires_at) "
-            "VALUES (?, ?, ?, ?)",
-            (_digest(state), user_id, now, now + OAUTH_STATE_TTL_SECONDS),
+            "INSERT INTO oauth_states "
+            "(state_hash, user_id, created_at, expires_at, code_verifier) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                _digest(state),
+                user_id,
+                now,
+                now + OAUTH_STATE_TTL_SECONDS,
+                code_verifier,
+            ),
         )
-    return state
+    return state, code_verifier
 
 
-def consume_oauth_state(state: str) -> int | None:
+def consume_oauth_state(state: str, user_id: int) -> str | None:
     with _connection() as connection:
         row = connection.execute(
-            "DELETE FROM oauth_states WHERE state_hash = ? AND expires_at > ? "
-            "RETURNING user_id",
-            (_digest(state), time.time()),
+            "DELETE FROM oauth_states WHERE state_hash = ? AND user_id = ? "
+            "AND expires_at > ? RETURNING code_verifier",
+            (_digest(state), user_id, time.time()),
         ).fetchone()
-    return int(row["user_id"]) if row else None
+    if not row or not row["code_verifier"]:
+        return None
+    return str(row["code_verifier"])
 
 
 def store_gmail_credentials(user_id: int, credential_ciphertext: str) -> None:
